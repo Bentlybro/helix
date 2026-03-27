@@ -33,6 +33,7 @@ BLECharacteristic yawChar            = BLECharacteristic(YAW_UUID);
 // Sensor fusion state
 float roll = 0.0, pitch = 0.0, yaw = 0.0;
 unsigned long lastUpdate = 0;
+unsigned long lastSerial = 0;
 const float dt = 0.01;
 const float alpha = 0.98;
 
@@ -106,6 +107,9 @@ void setup() {
   yawChar.begin();
 
   // Start advertising
+  // Request minimum connection interval for lowest latency (7.5ms)
+  Bluefruit.Periph.setConnInterval(6, 12); // 7.5ms - 15ms
+
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
   Bluefruit.Advertising.addService(headTrackerService);
@@ -121,6 +125,8 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
+
+  // IMU + BLE at 100Hz (every 10ms)
   if (now - lastUpdate >= 10) {
     lastUpdate = now;
     updateOrientation();
@@ -128,6 +134,14 @@ void loop() {
     if (Bluefruit.connected()) {
       sendBleData();
     }
+  }
+
+  // Serial debug at 5Hz (every 200ms) — readable without spam
+  if (now - lastSerial >= 200) {
+    lastSerial = now;
+    Serial.print("R:"); Serial.print(roll, 1);
+    Serial.print(" P:"); Serial.print(pitch, 1);
+    Serial.print(" Y:"); Serial.println(yaw, 1);
   }
 }
 
@@ -156,8 +170,4 @@ void sendBleData() {
   rollChar.notify((uint8_t*)&roll, 4);
   pitchChar.notify((uint8_t*)&pitch, 4);
   yawChar.notify((uint8_t*)&yaw, 4);
-
-  Serial.print("R:"); Serial.print(roll, 1);
-  Serial.print(" P:"); Serial.print(pitch, 1);
-  Serial.print(" Y:"); Serial.println(yaw, 1);
 }
