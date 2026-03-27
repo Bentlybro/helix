@@ -2,31 +2,33 @@
  * HeadTracker Firmware
  * XIAO nRF52840 Sense - BLE IMU Streamer
  * 
- * Required libraries (install via Library Manager):
- * - ArduinoBLE (by Arduino)
+ * Uses Bluefruit BLE stack (built into Seeed nRF52 Boards package)
+ * 
+ * Required libraries (Library Manager):
  * - Seeed Arduino LSM6DS3 (by Seeed Studio)
  * 
- * Board: "Seeed XIAO BLE Sense - nRF52840" (NOT the plain "Seeed XIAO BLE")
+ * Board: Seeed nRF52 Boards → Seeed XIAO BLE Sense - nRF52840
+ * (NOT the mbed-enabled variant)
  */
 
-#include <ArduinoBLE.h>
+#include <bluefruit.h>
 #include "LSM6DS3.h"
 #include "Wire.h"
 
 // BLE UUIDs
-const char* SERVICE_UUID = "917649A0-D98E-11E5-9EEC-0002A5D5C51B";
-const char* ROLL_UUID    = "917649A1-D98E-11E5-9EEC-0002A5D5C51B";
-const char* PITCH_UUID   = "917649A2-D98E-11E5-9EEC-0002A5D5C51B";
-const char* YAW_UUID     = "917649A3-D98E-11E5-9EEC-0002A5D5C51B";
+#define SERVICE_UUID  "917649A0-D98E-11E5-9EEC-0002A5D5C51B"
+#define ROLL_UUID     "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
+#define PITCH_UUID    "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
+#define YAW_UUID      "917649A3-D98E-11E5-9EEC-0002A5D5C51B"
 
-// Create IMU instance - Seeed LSM6DS3 library
+// IMU
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
 
 // BLE Service and Characteristics
-BLEService headTrackerService(SERVICE_UUID);
-BLEFloatCharacteristic rollChar(ROLL_UUID,  BLERead | BLENotify);
-BLEFloatCharacteristic pitchChar(PITCH_UUID, BLERead | BLENotify);
-BLEFloatCharacteristic yawChar(YAW_UUID,   BLERead | BLENotify);
+BLEService        headTrackerService = BLEService(SERVICE_UUID);
+BLECharacteristic rollChar           = BLECharacteristic(ROLL_UUID);
+BLECharacteristic pitchChar          = BLECharacteristic(PITCH_UUID);
+BLECharacteristic yawChar            = BLECharacteristic(YAW_UUID);
 
 // Sensor fusion state
 float roll = 0.0, pitch = 0.0, yaw = 0.0;
@@ -36,11 +38,22 @@ const float alpha = 0.98;
 
 void blink(int times, int ms = 200) {
   for (int i = 0; i < times; i++) {
-    digitalWrite(LED_BUILTIN, LOW);  // LOW = on for XIAO
+    digitalWrite(LED_BUILTIN, LOW);
     delay(ms);
     digitalWrite(LED_BUILTIN, HIGH);
     delay(ms);
   }
+}
+
+void connect_callback(uint16_t conn_handle) {
+  Serial.println("Connected!");
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
+  Serial.println("Disconnected");
+  digitalWrite(LED_BUILTIN, HIGH);
+  Bluefruit.Advertising.start(0);
 }
 
 void setup() {
@@ -57,7 +70,7 @@ void setup() {
   // Init IMU
   Serial.println("Initializing IMU...");
   if (myIMU.begin() != 0) {
-    Serial.println("IMU init FAILED! Check board selection and library.");
+    Serial.println("IMU init FAILED!");
     while (1) { blink(5, 100); delay(500); }
   }
   Serial.println("IMU OK");
@@ -65,50 +78,57 @@ void setup() {
 
   // Init BLE
   Serial.println("Initializing BLE...");
-  if (!BLE.begin()) {
-    Serial.println("BLE init FAILED!");
-    while (1) { blink(3, 100); delay(500); }
-  }
+  Bluefruit.begin();
+  Bluefruit.setTxPower(4);
+  Bluefruit.setName("HeadTracker");
+  Bluefruit.Periph.setConnectCallback(connect_callback);
+  Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
 
-  BLE.setLocalName("HeadTracker");
-  BLE.setAdvertisedService(headTrackerService);
-  headTrackerService.addCharacteristic(rollChar);
-  headTrackerService.addCharacteristic(pitchChar);
-  headTrackerService.addCharacteristic(yawChar);
-  BLE.addService(headTrackerService);
+  // Setup service
+  headTrackerService.begin();
 
-  rollChar.writeValue(0.0f);
-  pitchChar.writeValue(0.0f);
-  yawChar.writeValue(0.0f);
+  // Roll characteristic
+  rollChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  rollChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  rollChar.setFixedLen(4); // float = 4 bytes
+  rollChar.begin();
 
-  BLE.advertise();
+  // Pitch characteristic
+  pitchChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  pitchChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  pitchChar.setFixedLen(4);
+  pitchChar.begin();
+
+  // Yaw characteristic
+  yawChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  yawChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  yawChar.setFixedLen(4);
+  yawChar.begin();
+
+  // Start advertising
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  Bluefruit.Advertising.addService(headTrackerService);
+  Bluefruit.ScanResponse.addName();
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.setInterval(32, 244);
+  Bluefruit.Advertising.setFastTimeout(30);
+  Bluefruit.Advertising.start(0);
+
   Serial.println("Advertising as 'HeadTracker'");
   blink(3);
 }
 
 void loop() {
-  BLEDevice central = BLE.central();
+  unsigned long now = millis();
+  if (now - lastUpdate >= 10) {
+    lastUpdate = now;
+    updateOrientation();
 
-  if (central) {
-    Serial.print("Connected: ");
-    Serial.println(central.address());
-    digitalWrite(LED_BUILTIN, LOW);
-
-    while (central.connected()) {
-      unsigned long now = millis();
-      if (now - lastUpdate >= 10) {
-        lastUpdate = now;
-        updateOrientation();
-        sendBleData();
-      }
-      BLE.poll();
+    if (Bluefruit.connected()) {
+      sendBleData();
     }
-
-    digitalWrite(LED_BUILTIN, HIGH);
-    Serial.println("Disconnected");
   }
-
-  BLE.poll();
 }
 
 void updateOrientation() {
@@ -134,9 +154,9 @@ void updateOrientation() {
 }
 
 void sendBleData() {
-  rollChar.writeValue(roll);
-  pitchChar.writeValue(pitch);
-  yawChar.writeValue(yaw);
+  rollChar.notify((uint8_t*)&roll, 4);
+  pitchChar.notify((uint8_t*)&pitch, 4);
+  yawChar.notify((uint8_t*)&yaw, 4);
 
   Serial.print("R:"); Serial.print(roll, 1);
   Serial.print(" P:"); Serial.print(pitch, 1);
