@@ -1,43 +1,46 @@
 #!/usr/bin/env python3
 """
 HeadTracker BLE Receiver
-Receives orientation and IMU data from the HeadTracker wearable
+Receives orientation data from the HeadTracker wearable
 """
 
 import asyncio
-import struct
 from bleak import BleakClient, BleakScanner
 
 # BLE UUIDs (must match firmware)
 SERVICE_UUID = "917649A0-D98E-11E5-9EEC-0002A5D5C51B"
-ORIENTATION_UUID = "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
-RAW_IMU_UUID = "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
+ROLL_UUID = "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
+PITCH_UUID = "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
+YAW_UUID = "917649A3-D98E-11E5-9EEC-0002A5D5C51B"
 
 DEVICE_NAME = "HeadTracker"
 
-
-def parse_orientation(data: bytearray) -> tuple:
-    """Parse roll, pitch, yaw from 12 bytes (3x float32)"""
-    return struct.unpack('<fff', data)
-
-
-def parse_raw_imu(data: bytearray) -> tuple:
-    """Parse accel XYZ, gyro XYZ from 24 bytes (6x float32)"""
-    values = struct.unpack('<ffffff', data)
-    return values[:3], values[3:]
+# Latest values
+roll_val = 0.0
+pitch_val = 0.0
+yaw_val = 0.0
 
 
-def orientation_handler(sender, data: bytearray):
-    """Callback for orientation notifications"""
-    roll, pitch, yaw = parse_orientation(data)
-    print(f"[ORIENTATION] Roll: {roll:7.2f}° | Pitch: {pitch:7.2f}° | Yaw: {yaw:7.2f}°")
+def roll_handler(sender, data: bytearray):
+    global roll_val
+    roll_val = float.from_bytes(data, byteorder='little', signed=True)
+    print_state()
 
 
-def raw_imu_handler(sender, data: bytearray):
-    """Callback for raw IMU notifications"""
-    accel, gyro = parse_raw_imu(data)
-    print(f"[RAW IMU] Accel: ({accel[0]:6.2f}, {accel[1]:6.2f}, {accel[2]:6.2f}) | "
-          f"Gyro: ({gyro[0]:6.2f}, {gyro[1]:6.2f}, {gyro[2]:6.2f})")
+def pitch_handler(sender, data: bytearray):
+    global pitch_val
+    pitch_val = float.from_bytes(data, byteorder='little', signed=True)
+    print_state()
+
+
+def yaw_handler(sender, data: bytearray):
+    global yaw_val
+    yaw_val = float.from_bytes(data, byteorder='little', signed=True)
+    print_state()
+
+
+def print_state():
+    print(f"\rRoll: {roll_val:7.2f}° | Pitch: {pitch_val:7.2f}° | Yaw: {yaw_val:7.2f}°", end="", flush=True)
 
 
 async def find_device():
@@ -60,24 +63,23 @@ async def main():
 
     async with BleakClient(device) as client:
         print(f"Connected to {device.address}")
+        print("Receiving data... Press Ctrl+C to stop")
+        print("-" * 60)
 
         # Subscribe to characteristics
-        await client.start_notify(ORIENTATION_UUID, orientation_handler)
-        await client.start_notify(RAW_IMU_UUID, raw_imu_handler)
-
-        print("Receiving data... Press Ctrl+C to stop")
-        print("-" * 80)
+        await client.start_notify(ROLL_UUID, roll_handler)
+        await client.start_notify(PITCH_UUID, pitch_handler)
+        await client.start_notify(YAW_UUID, yaw_handler)
 
         try:
-            # Keep running
             while True:
                 await asyncio.sleep(1)
         except KeyboardInterrupt:
             print("\nStopping...")
 
-        # Unsubscribe
-        await client.stop_notify(ORIENTATION_UUID)
-        await client.stop_notify(RAW_IMU_UUID)
+        await client.stop_notify(ROLL_UUID)
+        await client.stop_notify(PITCH_UUID)
+        await client.stop_notify(YAW_UUID)
 
     print("Disconnected")
 

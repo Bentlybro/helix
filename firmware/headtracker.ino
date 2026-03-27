@@ -2,61 +2,72 @@
  * HeadTracker Firmware
  * XIAO nRF52840 Sense - BLE IMU Streamer
  * 
- * Streams orientation and raw IMU data over BLE
+ * Streams orientation (roll, pitch, yaw) over BLE
+ * 
+ * Required libraries (install via Arduino Library Manager):
+ * - ArduinoBLE (by Arduino)
+ * - LSM6DS3 (by Seeed Studio)
  */
 
 #include <ArduinoBLE.h>
-#include <LSM6DS3.h>
+#include "LSM6DS3.h"
 #include <Wire.h>
 
 // BLE Service and Characteristic UUIDs
-#define SERVICE_UUID        "917649A0-D98E-11E5-9EEC-0002A5D5C51B"
-#define ORIENTATION_UUID    "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
-#define RAW_IMU_UUID        "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
+const char* SERVICE_UUID = "917649A0-D98E-11E5-9EEC-0002A5D5C51B";
+const char* ROLL_UUID = "917649A1-D98E-11E5-9EEC-0002A5D5C51B";
+const char* PITCH_UUID = "917649A2-D98E-11E5-9EEC-0002A5D5C51B";
+const char* YAW_UUID = "917649A3-D98E-11E5-9EEC-0002A5D5C51B";
 
-// IMU
-LSM6DS3 imu(I2C_MODE, 0x6A);
+// IMU - Create instance for XIAO nRF52840 Sense
+LSM6DS3 myIMU(I2C_MODE, 0x6A);
 
-// BLE
+// BLE Service
 BLEService headTrackerService(SERVICE_UUID);
-BLECharacteristic orientationChar(ORIENTATION_UUID, BLERead | BLENotify, 12); // 3 floats
-BLECharacteristic rawImuChar(RAW_IMU_UUID, BLERead | BLENotify, 24); // 6 floats
+
+// BLE Characteristics - individual floats for each axis
+BLEFloatCharacteristic rollChar(ROLL_UUID, BLERead | BLENotify);
+BLEFloatCharacteristic pitchChar(PITCH_UUID, BLERead | BLENotify);
+BLEFloatCharacteristic yawChar(YAW_UUID, BLERead | BLENotify);
 
 // Sensor fusion state
 float roll = 0.0, pitch = 0.0, yaw = 0.0;
 unsigned long lastUpdate = 0;
-const float dt = 0.01; // 100Hz
+const float dt = 0.01; // 10ms = 100Hz
 
 // Complementary filter coefficient
 const float alpha = 0.98;
 
 void setup() {
   Serial.begin(115200);
-  //while (!Serial); // Uncomment for debug, comment for standalone
+  // while (!Serial); // Comment out for standalone operation
   
-  // Init IMU
-  if (imu.begin() != 0) {
-    Serial.println("IMU init failed!");
+  // Initialize IMU
+  if (myIMU.begin() != 0) {
+    Serial.println("IMU initialization failed!");
     while (1);
   }
   Serial.println("IMU initialized");
   
-  // Init BLE
+  // Initialize BLE
   if (!BLE.begin()) {
-    Serial.println("BLE init failed!");
+    Serial.println("BLE initialization failed!");
     while (1);
   }
   
+  // Set up BLE service
   BLE.setLocalName("HeadTracker");
   BLE.setAdvertisedService(headTrackerService);
   
-  headTrackerService.addCharacteristic(orientationChar);
-  headTrackerService.addCharacteristic(rawImuChar);
+  headTrackerService.addCharacteristic(rollChar);
+  headTrackerService.addCharacteristic(pitchChar);
+  headTrackerService.addCharacteristic(yawChar);
   
   BLE.addService(headTrackerService);
   
-  orientationChar.writeValue(0.0f);
-  rawImuChar.writeValue(0.0f);
+  rollChar.writeValue(0.0f);
+  pitchChar.writeValue(0.0f);
+  yawChar.writeValue(0.0f);
   
   BLE.advertise();
   Serial.println("HeadTracker advertising...");
@@ -88,19 +99,15 @@ void loop() {
 }
 
 void updateOrientation() {
-  // Read raw data
-  float accelX = imu.readFloatAccelX();
-  float accelY = imu.readFloatAccelY();
-  float accelZ = imu.readFloatAccelZ();
+  // Read raw accelerometer data
+  float accelX = myIMU.readFloatAccelX();
+  float accelY = myIMU.readFloatAccelY();
+  float accelZ = myIMU.readFloatAccelZ();
   
-  float gyroX = imu.readFloatGyroX();
-  float gyroY = imu.readFloatGyroY();
-  float gyroZ = imu.readFloatGyroZ();
-  
-  // Convert gyro from deg/s to rad/s
-  float gyroXRad = gyroX * DEG_TO_RAD;
-  float gyroYRad = gyroY * DEG_TO_RAD;
-  float gyroZRad = gyroZ * DEG_TO_RAD;
+  // Read raw gyroscope data (degrees per second)
+  float gyroX = myIMU.readFloatGyroX();
+  float gyroY = myIMU.readFloatGyroY();
+  float gyroZ = myIMU.readFloatGyroZ();
   
   // Calculate roll and pitch from accelerometer (gravity vector)
   float rollAccel = atan2(accelY, accelZ);
@@ -123,18 +130,12 @@ void updateOrientation() {
 }
 
 void sendBleData() {
-  // Pack orientation (roll, pitch, yaw) as floats
-  float orientation[3] = { roll, pitch, yaw };
-  orientationChar.writeValue((byte*)orientation, 12);
+  rollChar.writeValue(roll);
+  pitchChar.writeValue(pitch);
+  yawChar.writeValue(yaw);
   
-  // Pack raw IMU (accel XYZ, gyro XYZ)
-  float rawImu[6] = {
-    imu.readFloatAccelX(),
-    imu.readFloatAccelY(),
-    imu.readFloatAccelZ(),
-    imu.readFloatGyroX(),
-    imu.readFloatGyroY(),
-    imu.readFloatGyroZ()
-  };
-  rawImuChar.writeValue((byte*)rawImu, 24);
+  // Debug output (comment out for production)
+  // Serial.print(roll); Serial.print(",");
+  // Serial.print(pitch); Serial.print(",");
+  // Serial.println(yaw);
 }
