@@ -35,8 +35,8 @@ const float alpha = 0.98;   // Complementary filter coefficient
 void setup() {
   Serial.begin(115200);
 
-  // Init IMU - use pre-instantiated global 'IMU'
-  if (IMU.begin() != 0) {
+  // Init IMU
+  if (!IMU.begin()) {
     Serial.println("IMU init failed!");
     while (1);
   }
@@ -87,23 +87,23 @@ void loop() {
 }
 
 void updateOrientation() {
-  float accelX = IMU.readFloatAccelX();
-  float accelY = IMU.readFloatAccelY();
-  float accelZ = IMU.readFloatAccelZ();
-  float gyroX  = IMU.readFloatGyroX();
-  float gyroY  = IMU.readFloatGyroY();
-  float gyroZ  = IMU.readFloatGyroZ();
+  float accelX, accelY, accelZ;
+  float gyroX, gyroY, gyroZ;
+
+  // Read acceleration (m/s^2) and gyroscope (deg/s)
+  if (!IMU.readAcceleration(accelX, accelY, accelZ)) return;
+  if (!IMU.readGyroscope(gyroX, gyroY, gyroZ)) return;
 
   // Accel-based roll and pitch
   float rollAccel  = atan2(accelY, accelZ);
   float pitchAccel = atan2(-accelX, sqrt(accelY * accelY + accelZ * accelZ));
 
-  // Integrate gyro for yaw (no magnetometer, so relative only)
+  // Integrate gyro for yaw (relative only, no magnetometer)
   yaw += gyroZ * dt;
   if (yaw >  180.0) yaw -= 360.0;
   if (yaw < -180.0) yaw += 360.0;
 
-  // Complementary filter
+  // Complementary filter for roll and pitch
   roll  = alpha * (roll  + gyroX * dt) + (1.0 - alpha) * rollAccel;
   pitch = alpha * (pitch + gyroY * dt) + (1.0 - alpha) * pitchAccel;
 
