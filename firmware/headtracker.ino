@@ -139,18 +139,17 @@ void updateOrientation() {
   float gyroY  = myIMU.readFloatGyroY();
   float gyroZ  = myIMU.readFloatGyroZ();
 
-  float rollAccel  = atan2(accelY, accelZ);
-  float pitchAccel = atan2(-accelX, sqrt(accelY * accelY + accelZ * accelZ));
+  // accel angles in degrees
+  float rollAccel  = atan2(accelY, accelZ) * RAD_TO_DEG;
+  float pitchAccel = atan2(-accelX, sqrt(accelY * accelY + accelZ * accelZ)) * RAD_TO_DEG;
 
+  // gyro is deg/s, dt is seconds — everything stays in degrees
   yaw += gyroZ * dt;
   if (yaw >  180.0) yaw -= 360.0;
   if (yaw < -180.0) yaw += 360.0;
 
   roll  = alpha * (roll  + gyroX * dt) + (1.0 - alpha) * rollAccel;
   pitch = alpha * (pitch + gyroY * dt) + (1.0 - alpha) * pitchAccel;
-
-  roll  *= RAD_TO_DEG;
-  pitch *= RAD_TO_DEG;
 }
 
 void sendBleData() {
