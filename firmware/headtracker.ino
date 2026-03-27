@@ -2,17 +2,16 @@
  * HeadTracker Firmware
  * XIAO nRF52840 Sense - BLE IMU Streamer
  * 
- * Streams orientation (roll, pitch, yaw) over BLE
- * 
  * Required libraries:
  * - ArduinoBLE (by Arduino) - install via Library Manager
- * 
- * The LSM6DS3 IMU is pre-instantiated as 'IMU' by the board package
  */
 
 #include <ArduinoBLE.h>
 #include <LSM6DS3.h>
 #include <Wire.h>
+
+// LED pin (XIAO nRF52840 has built-in LED on pin 13)
+#define LED_PIN LED_BUILTIN
 
 // BLE UUIDs
 const char* SERVICE_UUID = "917649A0-D98E-11E5-9EEC-0002A5D5C51B";
@@ -29,23 +28,46 @@ BLEFloatCharacteristic yawChar(YAW_UUID,   BLERead | BLENotify);
 // Sensor fusion state
 float roll = 0.0, pitch = 0.0, yaw = 0.0;
 unsigned long lastUpdate = 0;
-const float dt = 0.01;      // 10ms = 100Hz
-const float alpha = 0.98;   // Complementary filter coefficient
+const float dt = 0.01;
+const float alpha = 0.98;
+
+void blink(int times, int ms = 200) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(LED_PIN, LOW);  // LOW = on for XIAO
+    delay(ms);
+    digitalWrite(LED_PIN, HIGH);
+    delay(ms);
+  }
+}
 
 void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH); // off
+
   Serial.begin(115200);
 
+  // Wait up to 3s for serial monitor, then continue anyway
+  unsigned long t = millis();
+  while (!Serial && millis() - t < 3000);
+
+  Serial.println("HeadTracker booting...");
+  blink(2); // 2 blinks = started
+
   // Init IMU
+  Serial.println("Initializing IMU...");
   if (!IMU.begin()) {
-    Serial.println("IMU init failed!");
-    while (1);
+    Serial.println("IMU init FAILED!");
+    // Rapid blink = error
+    while (1) { blink(5, 100); delay(500); }
   }
-  Serial.println("IMU initialized");
+  Serial.println("IMU OK");
+  blink(1); // 1 blink = IMU good
 
   // Init BLE
+  Serial.println("Initializing BLE...");
   if (!BLE.begin()) {
-    Serial.println("BLE init failed!");
-    while (1);
+    Serial.println("BLE init FAILED!");
+    while (1) { blink(3, 100); delay(500); }
   }
 
   BLE.setLocalName("HeadTracker");
@@ -60,7 +82,8 @@ void setup() {
   yawChar.writeValue(0.0f);
 
   BLE.advertise();
-  Serial.println("HeadTracker advertising...");
+  Serial.println("Advertising as 'HeadTracker'");
+  blink(3); // 3 blinks = ready and advertising
 }
 
 void loop() {
@@ -69,6 +92,7 @@ void loop() {
   if (central) {
     Serial.print("Connected: ");
     Serial.println(central.address());
+    digitalWrite(LED_PIN, LOW); // solid on = connected
 
     while (central.connected()) {
       unsigned long now = millis();
@@ -80,6 +104,7 @@ void loop() {
       BLE.poll();
     }
 
+    digitalWrite(LED_PIN, HIGH); // off = disconnected
     Serial.println("Disconnected");
   }
 
@@ -90,24 +115,19 @@ void updateOrientation() {
   float accelX, accelY, accelZ;
   float gyroX, gyroY, gyroZ;
 
-  // Read acceleration (m/s^2) and gyroscope (deg/s)
   if (!IMU.readAcceleration(accelX, accelY, accelZ)) return;
   if (!IMU.readGyroscope(gyroX, gyroY, gyroZ)) return;
 
-  // Accel-based roll and pitch
   float rollAccel  = atan2(accelY, accelZ);
   float pitchAccel = atan2(-accelX, sqrt(accelY * accelY + accelZ * accelZ));
 
-  // Integrate gyro for yaw (relative only, no magnetometer)
   yaw += gyroZ * dt;
   if (yaw >  180.0) yaw -= 360.0;
   if (yaw < -180.0) yaw += 360.0;
 
-  // Complementary filter for roll and pitch
   roll  = alpha * (roll  + gyroX * dt) + (1.0 - alpha) * rollAccel;
   pitch = alpha * (pitch + gyroY * dt) + (1.0 - alpha) * pitchAccel;
 
-  // Convert to degrees
   roll  *= RAD_TO_DEG;
   pitch *= RAD_TO_DEG;
 }
@@ -117,7 +137,7 @@ void sendBleData() {
   pitchChar.writeValue(pitch);
   yawChar.writeValue(yaw);
 
-  Serial.print("R:"); Serial.print(roll);
-  Serial.print(" P:"); Serial.print(pitch);
-  Serial.print(" Y:"); Serial.println(yaw);
+  Serial.print("R:"); Serial.print(roll, 1);
+  Serial.print(" P:"); Serial.print(pitch, 1);
+  Serial.print(" Y:"); Serial.println(yaw, 1);
 }
