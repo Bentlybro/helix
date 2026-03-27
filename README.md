@@ -15,7 +15,7 @@ Use cases are built as separate apps:
 
 ## Form Factor
 
-Behind-the-ear hook style (like hearing aids or the Lucid EEG device):
+Behind-the-ear hook style (similar to hearing aids):
 - Discreet enough for daily wear
 - Stable positioning for accurate tracking
 - Room for small battery and electronics
