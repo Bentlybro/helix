@@ -5,75 +5,73 @@ Receives orientation data from the HeadTracker wearable
 """
 
 import asyncio
+import struct
 from bleak import BleakClient, BleakScanner
 
 # BLE UUIDs (must match firmware)
-SERVICE_UUID = "917649A0-D98E-11E5-9EEC-0002A5D5C51B"
-ROLL_UUID = "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
-PITCH_UUID = "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
-YAW_UUID = "917649A3-D98E-11E5-9EEC-0002A5D5C51B"
+ROLL_UUID  = "917649a1-d98e-11e5-9eec-0002a5d5c51b"
+PITCH_UUID = "917649a2-d98e-11e5-9eec-0002a5d5c51b"
+YAW_UUID   = "917649a3-d98e-11e5-9eec-0002a5d5c51b"
 
 DEVICE_NAME = "HeadTracker"
 
 # Latest values
-roll_val = 0.0
-pitch_val = 0.0
-yaw_val = 0.0
+state = {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+
+
+def parse_float(data: bytearray) -> float:
+    """Parse a little-endian IEEE 754 float from 4 bytes"""
+    return struct.unpack('<f', bytes(data))[0]
 
 
 def roll_handler(sender, data: bytearray):
-    global roll_val
-    roll_val = float.from_bytes(data, byteorder='little', signed=True)
+    state["roll"] = parse_float(data)
     print_state()
 
 
 def pitch_handler(sender, data: bytearray):
-    global pitch_val
-    pitch_val = float.from_bytes(data, byteorder='little', signed=True)
+    state["pitch"] = parse_float(data)
     print_state()
 
 
 def yaw_handler(sender, data: bytearray):
-    global yaw_val
-    yaw_val = float.from_bytes(data, byteorder='little', signed=True)
+    state["yaw"] = parse_float(data)
     print_state()
 
 
 def print_state():
-    print(f"\rRoll: {roll_val:7.2f}° | Pitch: {pitch_val:7.2f}° | Yaw: {yaw_val:7.2f}°", end="", flush=True)
+    print(f"\rRoll: {state['roll']:7.2f}°  Pitch: {state['pitch']:7.2f}°  Yaw: {state['yaw']:7.2f}°    ", end="", flush=True)
 
 
-async def find_device():
+async def find_device(timeout=10.0):
     """Scan for HeadTracker device"""
-    print("Scanning for HeadTracker...")
-    device = await BleakScanner.find_device_by_filter(
-        lambda d, ad: d.name and d.name == DEVICE_NAME
-    )
+    print(f"Scanning for '{DEVICE_NAME}' (timeout {timeout}s)...")
+    device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=timeout)
     return device
 
 
 async def main():
-    # Find device
     device = await find_device()
     if not device:
-        print("HeadTracker not found! Make sure it's powered on and advertising.")
+        print(f"\nHeadTracker not found!")
+        print("Make sure it's powered on and advertising.")
+        print("Try running: python scan.py  to list nearby BLE devices")
         return
 
     print(f"Found HeadTracker: {device.address}")
 
     async with BleakClient(device) as client:
-        print(f"Connected to {device.address}")
+        print(f"Connected!")
         print("Receiving data... Press Ctrl+C to stop")
         print("-" * 60)
 
-        # Subscribe to characteristics
         await client.start_notify(ROLL_UUID, roll_handler)
         await client.start_notify(PITCH_UUID, pitch_handler)
         await client.start_notify(YAW_UUID, yaw_handler)
 
         try:
             while True:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.1)
         except KeyboardInterrupt:
             print("\nStopping...")
 
