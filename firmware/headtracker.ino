@@ -4,65 +4,55 @@
  * 
  * Streams orientation (roll, pitch, yaw) over BLE
  * 
- * Required libraries (install via Arduino Library Manager):
- * - ArduinoBLE (by Arduino)
+ * Required libraries:
+ * - ArduinoBLE (by Arduino) - install via Library Manager
  * 
- * Note: LSM6DS3 IMU driver is built into the Seeed nRF52 board package
+ * The LSM6DS3 IMU is pre-instantiated as 'IMU' by the board package
  */
 
 #include <ArduinoBLE.h>
 #include <LSM6DS3.h>
 #include <Wire.h>
 
-// BLE Service and Characteristic UUIDs
+// BLE UUIDs
 const char* SERVICE_UUID = "917649A0-D98E-11E5-9EEC-0002A5D5C51B";
-const char* ROLL_UUID = "917649A1-D98E-11E5-9EEC-0002A5D5C51B";
-const char* PITCH_UUID = "917649A2-D98E-11E5-9EEC-0002A5D5C51B";
-const char* YAW_UUID = "917649A3-D98E-11E5-9EEC-0002A5D5C51B";
+const char* ROLL_UUID    = "917649A1-D98E-11E5-9EEC-0002A5D5C51B";
+const char* PITCH_UUID   = "917649A2-D98E-11E5-9EEC-0002A5D5C51B";
+const char* YAW_UUID     = "917649A3-D98E-11E5-9EEC-0002A5D5C51B";
 
-// IMU - use built-in class from board package
-IMU_LSM6DS3 myIMU(I2C_MODE, 0x6A);
-
-// BLE Service
+// BLE Service and Characteristics
 BLEService headTrackerService(SERVICE_UUID);
-
-// BLE Characteristics - individual floats for each axis
-BLEFloatCharacteristic rollChar(ROLL_UUID, BLERead | BLENotify);
+BLEFloatCharacteristic rollChar(ROLL_UUID,  BLERead | BLENotify);
 BLEFloatCharacteristic pitchChar(PITCH_UUID, BLERead | BLENotify);
-BLEFloatCharacteristic yawChar(YAW_UUID, BLERead | BLENotify);
+BLEFloatCharacteristic yawChar(YAW_UUID,   BLERead | BLENotify);
 
 // Sensor fusion state
 float roll = 0.0, pitch = 0.0, yaw = 0.0;
 unsigned long lastUpdate = 0;
-const float dt = 0.01; // 10ms = 100Hz
-
-// Complementary filter coefficient
-const float alpha = 0.98;
+const float dt = 0.01;      // 10ms = 100Hz
+const float alpha = 0.98;   // Complementary filter coefficient
 
 void setup() {
   Serial.begin(115200);
-  // while (!Serial); // Comment out for standalone operation
 
-  // Initialize IMU
-  if (myIMU.begin() != 0) {
-    Serial.println("IMU initialization failed!");
+  // Init IMU - use pre-instantiated global 'IMU'
+  if (IMU.begin() != 0) {
+    Serial.println("IMU init failed!");
     while (1);
   }
   Serial.println("IMU initialized");
 
-  // Initialize BLE
+  // Init BLE
   if (!BLE.begin()) {
-    Serial.println("BLE initialization failed!");
+    Serial.println("BLE init failed!");
     while (1);
   }
 
   BLE.setLocalName("HeadTracker");
   BLE.setAdvertisedService(headTrackerService);
-
   headTrackerService.addCharacteristic(rollChar);
   headTrackerService.addCharacteristic(pitchChar);
   headTrackerService.addCharacteristic(yawChar);
-
   BLE.addService(headTrackerService);
 
   rollChar.writeValue(0.0f);
@@ -77,18 +67,16 @@ void loop() {
   BLEDevice central = BLE.central();
 
   if (central) {
-    Serial.print("Connected to: ");
+    Serial.print("Connected: ");
     Serial.println(central.address());
 
     while (central.connected()) {
       unsigned long now = millis();
-
       if (now - lastUpdate >= 10) {
         lastUpdate = now;
         updateOrientation();
         sendBleData();
       }
-
       BLE.poll();
     }
 
@@ -99,29 +87,28 @@ void loop() {
 }
 
 void updateOrientation() {
-  float accelX = myIMU.readFloatAccelX();
-  float accelY = myIMU.readFloatAccelY();
-  float accelZ = myIMU.readFloatAccelZ();
+  float accelX = IMU.readFloatAccelX();
+  float accelY = IMU.readFloatAccelY();
+  float accelZ = IMU.readFloatAccelZ();
+  float gyroX  = IMU.readFloatGyroX();
+  float gyroY  = IMU.readFloatGyroY();
+  float gyroZ  = IMU.readFloatGyroZ();
 
-  float gyroX = myIMU.readFloatGyroX();
-  float gyroY = myIMU.readFloatGyroY();
-  float gyroZ = myIMU.readFloatGyroZ();
-
-  // Calculate roll and pitch from accelerometer
-  float rollAccel = atan2(accelY, accelZ);
+  // Accel-based roll and pitch
+  float rollAccel  = atan2(accelY, accelZ);
   float pitchAccel = atan2(-accelX, sqrt(accelY * accelY + accelZ * accelZ));
 
-  // Integrate gyro for yaw
+  // Integrate gyro for yaw (no magnetometer, so relative only)
   yaw += gyroZ * dt;
-  if (yaw > 180.0) yaw -= 360.0;
+  if (yaw >  180.0) yaw -= 360.0;
   if (yaw < -180.0) yaw += 360.0;
 
-  // Complementary filter for roll and pitch
-  roll = alpha * (roll + gyroX * dt) + (1.0 - alpha) * rollAccel;
+  // Complementary filter
+  roll  = alpha * (roll  + gyroX * dt) + (1.0 - alpha) * rollAccel;
   pitch = alpha * (pitch + gyroY * dt) + (1.0 - alpha) * pitchAccel;
 
   // Convert to degrees
-  roll *= RAD_TO_DEG;
+  roll  *= RAD_TO_DEG;
   pitch *= RAD_TO_DEG;
 }
 
@@ -130,8 +117,7 @@ void sendBleData() {
   pitchChar.writeValue(pitch);
   yawChar.writeValue(yaw);
 
-  // Debug output
-  Serial.print(roll); Serial.print(",");
-  Serial.print(pitch); Serial.print(",");
-  Serial.println(yaw);
+  Serial.print("R:"); Serial.print(roll);
+  Serial.print(" P:"); Serial.print(pitch);
+  Serial.print(" Y:"); Serial.println(yaw);
 }
