@@ -1,108 +1,70 @@
-# HeadTracker
+# Helix
 
-A discreet behind-the-ear wearable for head pose tracking. Generic IMU platform that any app can consume.
+A modular behind-the-ear wearable platform. The ear clip is the mount — snap any module onto it.
 
 ## Vision
 
-Not a single-purpose device — a **platform**. The wearable streams head rotation and movement data over Bluetooth or WiFi, and any application can subscribe to that data stream.
+Not a single-purpose device — a **platform**. The ear clip attaches to your ear, and any module can magnetically connect to it. Start with the IMU module for head tracking, build anything else later.
 
-Use cases are built as separate apps:
-- **Monitor focus switching** — auto-switch active window based on which screen you're facing
-- **Gesture control** — nod/shake/tilt as input
-- **VRChat head tracking** — feed directly into avatar animation
-- **Accessibility** — head-as-mouse for hands-free computing
-- **Sports/training** — track head position during drills
+**Modules (current + planned):**
+- **Helix IMU** — XIAO nRF52840 Sense, head pose tracking over BLE
+- More to come — the clip is the constant, the module is the variable
 
-## Form Factor
+## Ear Clip
 
-Behind-the-ear hook style (similar to hearing aids):
-- Discreet enough for daily wear
-- Stable positioning for accurate tracking
-- Room for small battery and electronics
+Behind-the-ear hook design, 3D printed:
+- Hooks over the top and bottom of the ear
+- Flat magnetic mounting face on the back
+- Discreet, comfortable for all-day wear
+- Designed for swappable modules
 
 ## Connectivity
 
-- **Bluetooth LE** — primary, for mobile apps and always-on use
-- **WiFi** — secondary, for home/PC use (lower latency, higher bandwidth)
-
-Both protocols expose the same data stream — apps don't care which transport.
-
-## Data Stream
-
-The device broadcasts:
-- **Orientation** — roll, pitch, yaw (degrees)
-- **Raw IMU** — accelerometer XYZ, gyroscope XYZ
-- **Timestamp** — for synchronization
-
-## Architecture
-
-```
-┌─────────────────┐      BLE       ┌─────────────────┐
-│   HeadTracker   │ ─────────────► │   Client App    │
-│ (XIAO nRF52840  │                │   (Phone/PC)    │
-│    Sense)       │                │                 │
-└─────────────────┘                └─────────────────┘
-```
-
-The device is dumb — it just streams sensor data. All the logic (gesture detection, screen mapping, etc.) lives in the client apps.
-
-## Hardware
-
-**Prototype (current):**
-- **MCU**: Seeed XIAO nRF52840 Sense
-- **IMU**: Onboard LSM6DS3 (accel + gyro)
-- **Connectivity**: BLE 5.0
-- **Power**: USB-C (battery TBD)
-
-**Future (custom PCB):**
-- Same hardware, miniaturized
-- Integrated LiPo + charging
-- Behind-the-ear enclosure
+- **Bluetooth LE** — primary, for mobile apps and desktop
+- Protocol: single packed BLE characteristic (12 bytes: roll, pitch, yaw as float32)
 
 ## Repository Structure
 
 ```
-headtracker/
-├── firmware/           # Arduino firmware for XIAO nRF52840 Sense
-│   └── headtracker.ino
+helix/
+├── firmware/
+│   └── helix.ino          # Arduino firmware for XIAO nRF52840 Sense
 ├── apps/
-│   └── receiver-python/ # Python BLE receiver for testing
-│       └── receiver.py
+│   └── receiver-python/   # Python BLE receiver for testing
+│       ├── receiver.py
+│       └── scan.py
 └── README.md
 ```
 
-## Getting Started
+## Getting Started (IMU Module)
 
 ### 1. Flash Firmware
 
 1. Install [Arduino IDE](https://www.arduino.cc/en/software)
 2. Add Seeed nRF52 boards: `https://files.seeedstudio.com/arduino/package_seeeduino_arduino_board_index.json`
-3. Install "Seeed nRF52 Boards" package
-4. Open `firmware/headtracker.ino`
-5. Select "Seeed XIAO BLE Sense - nRF52840" as board
-6. Upload (double-press reset to enter bootloader)
+3. Install **"Seeed nRF52 Boards"** package (NOT mbed-enabled)
+4. Install **"Seeed Arduino LSM6DS3"** library
+5. Select **"Seeed XIAO BLE Sense - nRF52840"** as board
+6. Open `firmware/helix.ino` and upload
 
 ### 2. Run Receiver
 
 ```bash
 cd apps/receiver-python
-pip install bleak numpy
+pip install bleak
 python receiver.py
 ```
 
-The receiver will scan for "HeadTracker" and display orientation/IMU data.
+## Hardware (IMU Module)
+
+- **MCU**: Seeed XIAO nRF52840 Sense (BLE + onboard LSM6DS3 IMU)
+- **Battery**: LP502030 250mAh LiPo
+- **Switch**: Slide switch in series with battery
+- **Enclosure**: 3D printed module, magnetically attaches to ear clip
 
 ## Status
 
-🚧 **Prototype phase** — firmware and basic receiver working
-
-## Next Steps
-
-- [ ] Test firmware on hardware
-- [ ] Add battery + charging
-- [ ] Design 3D printed enclosure
-- [ ] Build monitor-switching app
-- [ ] Improve sensor fusion (Madgwick filter?)
+🚧 **Prototype phase** — firmware working, ear clip printed, module enclosure in progress
 
 ## License
 

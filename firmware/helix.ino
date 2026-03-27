@@ -1,5 +1,5 @@
 /*
- * HeadTracker Firmware
+ * Helix Firmware
  * XIAO nRF52840 Sense - BLE IMU Streamer
  * 
  * Uses Bluefruit BLE stack (built into Seeed nRF52 Boards package)
@@ -60,7 +60,7 @@ void setup() {
   unsigned long t = millis();
   while (!Serial && millis() - t < 3000);
 
-  Serial.println("HeadTracker booting...");
+  Serial.println("Helix booting...");
   blink(2);
 
   // Init IMU
@@ -75,7 +75,7 @@ void setup() {
   // Init BLE
   Bluefruit.begin();
   Bluefruit.setTxPower(4);
-  Bluefruit.setName("HeadTracker");
+  Bluefruit.setName("Helix");
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
 
@@ -98,7 +98,7 @@ void setup() {
   Bluefruit.Advertising.setFastTimeout(30);
   Bluefruit.Advertising.start(0);
 
-  Serial.println("Advertising as 'HeadTracker'");
+  Serial.println("Advertising as 'Helix'");
   blink(3);
 }
 

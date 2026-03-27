@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-HeadTracker BLE Receiver
-Receives packed orientation data (roll, pitch, yaw) from HeadTracker wearable
+Helix BLE Receiver
+Receives packed orientation data (roll, pitch, yaw) from Helix wearable
 """
 
 import asyncio
@@ -10,7 +10,7 @@ from bleak import BleakClient, BleakScanner
 
 # Must match firmware
 ORIENTATION_UUID = "917649a1-d98e-11e5-9eec-0002a5d5c51b"
-DEVICE_NAME = "HeadTracker"
+DEVICE_NAME = "Helix"
 
 
 def orientation_handler(sender, data: bytearray):
@@ -24,7 +24,7 @@ async def main():
     device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=10.0)
 
     if not device:
-        print("HeadTracker not found! Is it powered on?")
+        print("Helix not found! Is it powered on?")
         return
 
     print(f"Found: {device.address}")

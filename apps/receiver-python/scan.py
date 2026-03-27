@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 BLE Scanner - lists all nearby BLE devices
-Use this to verify HeadTracker is advertising
+Use this to verify Helix is advertising
 """
 
 import asyncio
