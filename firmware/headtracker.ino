@@ -15,26 +15,21 @@
 #include "LSM6DS3.h"
 #include "Wire.h"
 
-// BLE UUIDs
-#define SERVICE_UUID  "917649A0-D98E-11E5-9EEC-0002A5D5C51B"
-#define ROLL_UUID     "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
-#define PITCH_UUID    "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
-#define YAW_UUID      "917649A3-D98E-11E5-9EEC-0002A5D5C51B"
+// BLE UUIDs - single packed characteristic (roll, pitch, yaw as 3 floats = 12 bytes)
+#define SERVICE_UUID      "917649A0-D98E-11E5-9EEC-0002A5D5C51B"
+#define ORIENTATION_UUID  "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
 
 // IMU
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
 
-// BLE Service and Characteristics
-BLEService        headTrackerService = BLEService(SERVICE_UUID);
-BLECharacteristic rollChar           = BLECharacteristic(ROLL_UUID);
-BLECharacteristic pitchChar          = BLECharacteristic(PITCH_UUID);
-BLECharacteristic yawChar            = BLECharacteristic(YAW_UUID);
+// BLE - single characteristic with all 3 values packed
+BLEService        headTrackerService  = BLEService(SERVICE_UUID);
+BLECharacteristic orientationChar     = BLECharacteristic(ORIENTATION_UUID);
 
 // Sensor fusion state
 float roll = 0.0, pitch = 0.0, yaw = 0.0;
 unsigned long lastUpdate = 0;
 unsigned long lastSerial = 0;
-const float dt = 0.01;
 const float alpha = 0.98;
 
 void blink(int times, int ms = 200) {
@@ -78,36 +73,20 @@ void setup() {
   blink(1);
 
   // Init BLE
-  Serial.println("Initializing BLE...");
   Bluefruit.begin();
   Bluefruit.setTxPower(4);
   Bluefruit.setName("HeadTracker");
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
 
-  // Setup service
+  // Single packed orientation characteristic (12 bytes: roll, pitch, yaw)
   headTrackerService.begin();
+  orientationChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  orientationChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  orientationChar.setFixedLen(12);
+  orientationChar.begin();
 
-  // Roll characteristic
-  rollChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
-  rollChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  rollChar.setFixedLen(4); // float = 4 bytes
-  rollChar.begin();
-
-  // Pitch characteristic
-  pitchChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
-  pitchChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  pitchChar.setFixedLen(4);
-  pitchChar.begin();
-
-  // Yaw characteristic
-  yawChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
-  yawChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  yawChar.setFixedLen(4);
-  yawChar.begin();
-
-  // Start advertising
-  // Request minimum connection interval for lowest latency (7.5ms)
+  // Minimum connection interval for lowest latency
   Bluefruit.Periph.setConnInterval(6, 12); // 7.5ms - 15ms
 
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
@@ -128,15 +107,16 @@ void loop() {
 
   // IMU + BLE at 100Hz (every 10ms)
   if (now - lastUpdate >= 10) {
+    float dt = (now - lastUpdate) / 1000.0f; // real elapsed time in seconds
     lastUpdate = now;
-    updateOrientation();
+    updateOrientation(dt);
 
     if (Bluefruit.connected()) {
       sendBleData();
     }
   }
 
-  // Serial debug at 5Hz (every 200ms) — readable without spam
+  // Serial debug at 5Hz (every 200ms)
   if (now - lastSerial >= 200) {
     lastSerial = now;
     Serial.print("R:"); Serial.print(roll, 1);
@@ -145,7 +125,7 @@ void loop() {
   }
 }
 
-void updateOrientation() {
+void updateOrientation(float dt) {
   float accelX = myIMU.readFloatAccelX();
   float accelY = myIMU.readFloatAccelY();
   float accelZ = myIMU.readFloatAccelZ();
@@ -153,21 +133,22 @@ void updateOrientation() {
   float gyroY  = myIMU.readFloatGyroY();
   float gyroZ  = myIMU.readFloatGyroZ();
 
-  // accel angles in degrees
+  // Accel angles in degrees
   float rollAccel  = atan2(accelY, accelZ) * RAD_TO_DEG;
   float pitchAccel = atan2(-accelX, sqrt(accelY * accelY + accelZ * accelZ)) * RAD_TO_DEG;
 
-  // gyro is deg/s, dt is seconds — everything stays in degrees
+  // Integrate gyro for yaw (deg/s * s = deg)
   yaw += gyroZ * dt;
   if (yaw >  180.0) yaw -= 360.0;
   if (yaw < -180.0) yaw += 360.0;
 
+  // Complementary filter — everything in degrees
   roll  = alpha * (roll  + gyroX * dt) + (1.0 - alpha) * rollAccel;
   pitch = alpha * (pitch + gyroY * dt) + (1.0 - alpha) * pitchAccel;
 }
 
 void sendBleData() {
-  rollChar.notify((uint8_t*)&roll, 4);
-  pitchChar.notify((uint8_t*)&pitch, 4);
-  yawChar.notify((uint8_t*)&yaw, 4);
+  // Pack roll, pitch, yaw as 3 floats (12 bytes) — single atomic notify
+  float data[3] = { roll, pitch, yaw };
+  orientationChar.notify((uint8_t*)data, 12);
 }
