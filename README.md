@@ -30,41 +30,80 @@ Both protocols expose the same data stream — apps don't care which transport.
 ## Data Stream
 
 The device broadcasts:
-- **Orientation** — quaternion or euler angles (yaw/pitch/roll)
-- **Acceleration** — raw accelerometer data
+- **Orientation** — roll, pitch, yaw (degrees)
+- **Raw IMU** — accelerometer XYZ, gyroscope XYZ
 - **Timestamp** — for synchronization
-
-Protocol TBD — could be JSON over WebSocket, protobuf, or a custom binary format.
 
 ## Architecture
 
 ```
-┌─────────────────┐     BLE/WiFi     ┌─────────────────┐
-│   HeadTracker   │ ───────────────► │   Client App    │
-│   (ESP32-S3)    │                  │   (Phone/PC)    │
-│   + IMU         │                  │                 │
-└─────────────────┘                  └─────────────────┘
+┌─────────────────┐      BLE       ┌─────────────────┐
+│   HeadTracker   │ ─────────────► │   Client App    │
+│ (XIAO nRF52840  │                │   (Phone/PC)    │
+│    Sense)       │                │                 │
+└─────────────────┘                └─────────────────┘
 ```
 
 The device is dumb — it just streams sensor data. All the logic (gesture detection, screen mapping, etc.) lives in the client apps.
 
-## Hardware (Tentative)
+## Hardware
 
-- **MCU**: ESP32-S3 (BT + WiFi, familiar stack)
-- **IMU**: TBD — BNO055 (on-chip fusion) or LSM6DS3 + custom fusion
-- **Battery**: Small LiPo, maybe 100-150mAh
-- **Charging**: USB-C or Qi wireless
-- **Enclosure**: 3D printed, behind-the-ear hook design
+**Prototype (current):**
+- **MCU**: Seeed XIAO nRF52840 Sense
+- **IMU**: Onboard LSM6DS3 (accel + gyro)
+- **Connectivity**: BLE 5.0
+- **Power**: USB-C (battery TBD)
+
+**Future (custom PCB):**
+- Same hardware, miniaturized
+- Integrated LiPo + charging
+- Behind-the-ear enclosure
+
+## Repository Structure
+
+```
+headtracker/
+├── firmware/           # Arduino firmware for XIAO nRF52840 Sense
+│   └── headtracker.ino
+├── apps/
+│   └── receiver-python/ # Python BLE receiver for testing
+│       └── receiver.py
+└── README.md
+```
+
+## Getting Started
+
+### 1. Flash Firmware
+
+1. Install [Arduino IDE](https://www.arduino.cc/en/software)
+2. Add Seeed nRF52 boards: `https://files.seeedstudio.com/arduino/package_seeeduino_arduino_board_index.json`
+3. Install "Seeed nRF52 Boards" package
+4. Open `firmware/headtracker.ino`
+5. Select "Seeed XIAO BLE Sense - nRF52840" as board
+6. Upload (double-press reset to enter bootloader)
+
+### 2. Run Receiver
+
+```bash
+cd apps/receiver-python
+pip install bleak numpy
+python receiver.py
+```
+
+The receiver will scan for "HeadTracker" and display orientation/IMU data.
 
 ## Status
 
-🧠 Idea phase — planning and architecture
+🚧 **Prototype phase** — firmware and basic receiver working
 
 ## Next Steps
 
-- [ ] Finalize IMU choice (fusion vs raw)
-- [ ] Design power system (battery size, charging)
-- [ ] Prototype enclosure shape (comfort test)
-- [ ] Define data protocol
-- [ ] Build MVP firmware (stream orientation over BLE)
-- [ ] Build demo app (monitor focus switching)
+- [ ] Test firmware on hardware
+- [ ] Add battery + charging
+- [ ] Design 3D printed enclosure
+- [ ] Build monitor-switching app
+- [ ] Improve sensor fusion (Madgwick filter?)
+
+## License
+
+MIT
