@@ -118,8 +118,11 @@ int main(void)
     LOG_INF("Helix-Mic ready - waiting for connection");
     
     /* Main loop - monitor battery and handle state */
+    bool was_connected = false;
     while (1) {
-        if (transport_is_connected()) {
+        bool now_connected = transport_is_connected();
+
+        if (now_connected) {
             /* Fallback: if connected but mic not running, start it */
             if (!mic_running) {
                 LOG_WRN("Mic not running on connect - starting now (fallback)");
@@ -130,8 +133,13 @@ int main(void)
             uint8_t level = read_battery_level();
             transport_update_battery(level);
             LOG_DBG("Battery: %u%%", level);
+        } else if (was_connected) {
+            /* Just disconnected — give red flash time, then advertising LED */
+            k_sleep(K_MSEC(300));
+            led_set_state(LED_STATE_ADVERTISING);
         }
-        
+
+        was_connected = now_connected;
         k_sleep(K_SECONDS(10));
     }
     
@@ -217,13 +225,14 @@ static void connection_changed(bool connected)
         }
         mic_running = false;
         
-        /* Brief red flash, then restart advertising indicator */
+        /* Brief red flash — LED timer auto-transitions to OFF after 200ms.
+         * Don't k_sleep() here: this may run on the system workqueue.
+         * The main loop will set advertising LED when it sees disconnected. */
         led_set_state(LED_STATE_DISCONNECTED);
-        k_sleep(K_MSEC(300));
         
-        /* Restart advertising */
+        /* Restart advertising indicator after a brief delay using k_work */
         LOG_INF("Restarting advertising after disconnect...");
-        led_set_state(LED_STATE_ADVERTISING);
+        /* Let main loop handle LED transition to advertising */
     }
 }
 

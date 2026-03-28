@@ -40,6 +40,29 @@ static volatile bool is_connected;
 static transport_conn_cb_t conn_callback;
 static void (*mic_start_fn)(void);
 
+/* ─── Deferred work items (BT callbacks → system workqueue) ─────────── */
+/*
+ * BT GATT/conn callbacks run in the BT RX thread context.
+ * Calling dmic_configure/dmic_trigger/k_thread_join/k_sleep from there
+ * causes hard faults or deadlocks.  Defer to the system workqueue.
+ */
+static struct k_work mic_start_work;
+static struct k_work mic_stop_work;
+
+static void mic_start_handler(struct k_work *work)
+{
+    if (conn_callback) {
+        conn_callback(true);
+    }
+}
+
+static void mic_stop_handler(struct k_work *work)
+{
+    if (conn_callback) {
+        conn_callback(false);
+    }
+}
+
 /* Audio packet buffer: 3-byte header + up to 700 bytes payload */
 static uint8_t audio_pkt[703];
 static uint8_t battery_level = 100;
@@ -53,13 +76,9 @@ static void audio_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     LOG_INF("Audio notifications %s", value ? "enabled" : "disabled");
     if (value == BT_GATT_CCC_NOTIFY) {
-        if (conn_callback) {
-            conn_callback(true);
-        }
+        k_work_submit(&mic_start_work);
     } else {
-        if (conn_callback) {
-            conn_callback(false);
-        }
+        k_work_submit(&mic_stop_work);
     }
 }
 
@@ -212,9 +231,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     is_connected = false;
     current_mtu = 23;
 
-    if (conn_callback) {
-        conn_callback(false);
-    }
+    k_work_submit(&mic_stop_work);
 
     /* Restart advertising automatically */
     int err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
@@ -269,6 +286,11 @@ int transport_init(void)
     }
 
     LOG_INF("Helix GATT service registered");
+
+    /* Initialize deferred work items for BT callback → workqueue */
+    k_work_init(&mic_start_work, mic_start_handler);
+    k_work_init(&mic_stop_work, mic_stop_handler);
+
     return 0;
 }
 
