@@ -229,28 +229,25 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                                                         AudioFormat.CHANNEL_OUT_MONO,
                                                         AudioFormat.ENCODING_PCM_16BIT
                                                     )
-                                                    val bufSize = maxOf(pcmData.size, minBuf)
-                                                    val audioTrack = AudioTrack.Builder()
-                                                        .setAudioAttributes(
-                                                            AudioAttributes.Builder()
-                                                                .setUsage(AudioAttributes.USAGE_MEDIA)
-                                                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                                                                .build()
-                                                        )
-                                                        .setAudioFormat(
-                                                            AudioFormat.Builder()
-                                                                .setSampleRate(16000)
-                                                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                                                                .build()
-                                                        )
-                                                        .setTransferMode(AudioTrack.MODE_STATIC)
-                                                        .setBufferSizeInBytes(bufSize)
-                                                        .build()
-                                                    audioTrack.write(pcmData, 0, pcmData.size)
+                                                    // Use MODE_STREAM — simpler, no static buffer size issues
+                                                    val audioTrack = AudioTrack(
+                                                        AudioAttributes.Builder()
+                                                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                                                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                                            .build(),
+                                                        AudioFormat.Builder()
+                                                            .setSampleRate(16000)
+                                                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                                            .build(),
+                                                        minBuf,
+                                                        AudioTrack.MODE_STREAM,
+                                                        android.media.AudioManager.AUDIO_SESSION_ID_GENERATE
+                                                    )
                                                     audioTrack.play()
+                                                    audioTrack.write(pcmData, 0, pcmData.size)
                                                     val durationMs = (pcmData.size / 32000f * 1000).toLong()
-                                                    kotlinx.coroutines.delay(durationMs + 200)
+                                                    kotlinx.coroutines.delay(durationMs + 500)
                                                     audioTrack.stop()
                                                     audioTrack.release()
                                                 }
