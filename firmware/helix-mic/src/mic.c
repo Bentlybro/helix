@@ -74,8 +74,10 @@ int mic_start(void)
     nrfx_pdm_config_t cfg = NRFX_PDM_DEFAULT_CONFIG(PDM_CLK_PIN, PDM_DIN_PIN);
     cfg.clock_freq  = NRF_PDM_FREQ_1280K;
     cfg.mode        = NRF_PDM_MODE_MONO;
-    cfg.edge        = NRF_PDM_EDGE_LEFTFALLING;
+    cfg.edge        = NRF_PDM_EDGE_LEFTRISING; /* XIAO Sense: L/R=GND = left ch = rising edge */
     cfg.ratio       = NRF_PDM_RATIO_80X;
+    cfg.gain_l      = 0x28; /* 0dB explicit */
+    cfg.gain_r      = 0x28;
 
     /* Wire the IRQ directly — critical for nrfx_pdm on Zephyr */
     IRQ_DIRECT_CONNECT(PDM_IRQn, 5, nrfx_pdm_irq_handler, 0);
