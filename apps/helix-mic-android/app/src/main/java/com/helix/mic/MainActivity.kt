@@ -219,8 +219,10 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                             if (totalAudioBytes > 0) {
                                 OutlinedButton(
                                     onClick = {
-                                        scope.launch {
-                                            isPlaying = true
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                isPlaying = true
+                                            }
                                             try {
                                                 val pcmData = bleManager.getAudioBufferForTranscription()
                                                 if (pcmData.isNotEmpty()) {
@@ -229,7 +231,7 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                                                         AudioFormat.CHANNEL_OUT_MONO,
                                                         AudioFormat.ENCODING_PCM_16BIT
                                                     )
-                                                    // Use MODE_STREAM — simpler, no static buffer size issues
+                                                    val bufSize = maxOf(minBuf, 4096)
                                                     val audioTrack = AudioTrack(
                                                         AudioAttributes.Builder()
                                                             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -240,19 +242,28 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                                                             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                                                             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                                                             .build(),
-                                                        minBuf,
+                                                        bufSize,
                                                         AudioTrack.MODE_STREAM,
                                                         android.media.AudioManager.AUDIO_SESSION_ID_GENERATE
                                                     )
                                                     audioTrack.play()
-                                                    audioTrack.write(pcmData, 0, pcmData.size)
+                                                    // Stream in chunks to avoid blocking
+                                                    var offset = 0
+                                                    while (offset < pcmData.size) {
+                                                        val chunkSize = minOf(bufSize, pcmData.size - offset)
+                                                        audioTrack.write(pcmData, offset, chunkSize)
+                                                        offset += chunkSize
+                                                    }
+                                                    // Wait for playback to finish
                                                     val durationMs = (pcmData.size / 32000f * 1000).toLong()
-                                                    kotlinx.coroutines.delay(durationMs + 500)
+                                                    kotlinx.coroutines.delay(durationMs + 200)
                                                     audioTrack.stop()
                                                     audioTrack.release()
                                                 }
                                             } finally {
-                                                isPlaying = false
+                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                    isPlaying = false
+                                                }
                                             }
                                         }
                                     },
