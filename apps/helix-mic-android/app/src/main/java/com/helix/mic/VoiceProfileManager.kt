@@ -141,7 +141,8 @@ class VoiceProfileManager(private val context: Context) {
             val response = httpClient.newCall(request).execute()
             val body = response.body?.string() ?: "[]"
             if (response.isSuccessful) {
-                val arr = org.json.JSONArray(body)
+                val json = org.json.JSONObject(body)
+                val arr = json.optJSONArray("speakers") ?: org.json.JSONArray()
                 if (arr.length() > 0) {
                     val name = arr.getString(0)
                     // Sync local state
