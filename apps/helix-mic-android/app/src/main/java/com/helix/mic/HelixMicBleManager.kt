@@ -132,8 +132,9 @@ class HelixMicBleManager(private val context: Context) {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 this@HelixMicBleManager.gatt = gatt
-                gatt.discoverServices()
-            } else {
+                // Request larger MTU first — need >23 for audio streaming
+                gatt.requestMtu(247)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 _connectionState.value = ConnectionState.DISCONNECTED
                 _deviceAddress.value = null
                 _batteryPercent.value = null
@@ -142,6 +143,12 @@ class HelixMicBleManager(private val context: Context) {
                 gattQueue.clear()
                 gattBusy = false
             }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            android.util.Log.d("HelixMic", "MTU changed to $mtu (status=$status)")
+            // Now discover services after MTU is negotiated
+            gatt.discoverServices()
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
