@@ -18,6 +18,7 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #include "mic.h"
 #include "codec.h"
 #include "transport.h"
+#include "led.h"
 
 /* Battery ADC configuration - use node label directly */
 #define BATTERY_ADC_NODE DT_NODELABEL(adc)
@@ -66,6 +67,14 @@ int main(void)
     
     LOG_INF("Helix-Mic starting...");
     
+    /* Initialize LED first for boot indication */
+    ret = led_init();
+    if (ret < 0) {
+        LOG_WRN("LED init failed: %d", ret);
+    } else {
+        led_set_state(LED_STATE_BOOT);
+    }
+    
     /* Initialize subsystems */
     ret = mic_init();
     if (ret < 0) {
@@ -102,6 +111,9 @@ int main(void)
         return ret;
     }
     
+    /* Boot blinks should be done by now, switch to advertising */
+    led_set_state(LED_STATE_ADVERTISING);
+    
     LOG_INF("Helix-Mic ready - waiting for connection");
     
     /* Main loop - monitor battery and handle state */
@@ -133,6 +145,9 @@ static void audio_frame_handler(struct audio_frame *frame)
     if (!transport_is_connected()) {
         return;
     }
+    
+    /* Signal LED that audio is active */
+    led_notify_audio();
     
     /* Encode frame (currently PCM passthrough) */
     ret = codec_encode(frame->samples, frame->len, &encoded);
@@ -168,15 +183,24 @@ static void on_connect_start_mic(void)
 
 static void connection_changed(bool connected)
 {
-    if (!connected) {
+    if (connected) {
+        /* Start in connected-idle; audio handler will switch to audio state */
+        led_set_state(LED_STATE_CONNECTED_IDLE);
+    } else {
         LOG_INF("Client disconnected - stopping audio stream");
         int ret = mic_stop();
         if (ret < 0) {
             LOG_ERR("Failed to stop mic: %d", ret);
         }
         mic_running = false;
+        
+        /* Brief red flash, then restart advertising indicator */
+        led_set_state(LED_STATE_DISCONNECTED);
+        k_sleep(K_MSEC(300));
+        
+        /* Restart advertising LED after disconnect */
+        led_set_state(LED_STATE_ADVERTISING);
     }
-    /* Note: mic start is handled by transport's direct call or fallback in main loop */
 }
 
 static int init_battery_adc(void)

@@ -9,6 +9,7 @@ target_sources(app PRIVATE
     src/mic.c
     src/codec.c
     src/transport.c
+    src/led.c
 )
 
 target_include_directories(app PRIVATE src)
