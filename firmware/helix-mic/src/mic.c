@@ -65,6 +65,11 @@ int mic_start(void)
         return 0;
     }
 
+    /* Enable mic power — XIAO Sense has MSM261D3526HICPM-C with enable on P1.10 */
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 10));
+    nrf_gpio_pin_set(NRF_GPIO_PIN_MAP(1, 10));
+    LOG_INF("Mic power enabled (P1.10 HIGH)");
+
     /* Ensure HFCLK is running — required for PDM */
     if (!nrf_clock_hf_is_running(NRF_CLOCK, NRF_CLOCK_HFCLK_HIGH_ACCURACY)) {
         nrf_clock_task_trigger(NRF_CLOCK, NRF_CLOCK_TASK_HFCLKSTART);
@@ -112,6 +117,11 @@ int mic_stop(void)
 
     nrfx_pdm_stop();
     nrfx_pdm_uninit();
+    
+    /* Disable mic power */
+    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 10));
+    LOG_INF("Mic power disabled");
+    
     pdm_running = false;
 
     LOG_INF("PDM capture stopped");
