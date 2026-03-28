@@ -1,70 +1,119 @@
 # Helix
 
-A modular behind-the-ear wearable platform. The ear clip is the mount — snap any module onto it.
+A modular behind-the-ear wearable platform. The ear clip is the mount — snap any module onto it magnetically.
 
-## Vision
+## Concept
 
-Not a single-purpose device — a **platform**. The ear clip attaches to your ear, and any module can magnetically connect to it. Start with the IMU module for head tracking, build anything else later.
+Helix is not a single-purpose device. It's a **platform**.
 
-**Modules (current + planned):**
-- **Helix IMU** — XIAO nRF52840 Sense, head pose tracking over BLE
-- More to come — the clip is the constant, the module is the variable
+The ear clip attaches to your ear and stays there. Different electronic modules magnetically connect to it — each with their own MCU, sensors, and purpose. Swap modules, change what the device does. The clip is the constant, the module is the variable.
 
-## Ear Clip
+Current modules:
+- **Helix IMU** — head pose tracking (roll, pitch, yaw) over BLE
+- **Helix Mic** — microphone audio streaming over BLE for speech-to-text
 
-Behind-the-ear hook design, 3D printed:
-- Hooks over the top and bottom of the ear
-- Flat magnetic mounting face on the back
-- Discreet, comfortable for all-day wear
-- Designed for swappable modules
+Planned modules: anything that fits behind an ear.
 
-## Connectivity
+## Hardware
 
-- **Bluetooth LE** — primary, for mobile apps and desktop
-- Protocol: single packed BLE characteristic (12 bytes: roll, pitch, yaw as float32)
+### Ear Clip
+3D printed, behind-the-ear hook design with magnetic mounting face. Sits discreetly over the ear like a hearing aid. Houses no electronics — purely mechanical.
+
+### Helix IMU Module
+- **MCU**: Seeed XIAO nRF52840 Sense
+- **IMU**: Onboard LSM6DS3 (accel + gyro) — 6DOF, 200Hz
+- **Connectivity**: BLE 5.0
+- **Power**: LP502030 250mAh LiPo + slide switch
+- **Extras**: Battery % monitoring, onboard temperature sensor
+
+### Helix Mic Module
+- **MCU**: Seeed XIAO nRF52840 Sense
+- **Mic**: Onboard PDM microphone — 16kHz 16-bit mono
+- **Connectivity**: BLE 5.0
+- **Firmware**: Zephyr RTOS
 
 ## Repository Structure
 
 ```
 helix/
 ├── firmware/
-│   └── helix.ino          # Arduino firmware for XIAO nRF52840 Sense
+│   ├── helix-imu/          # Arduino (Seeed nRF52 Boards)
+│   │   └── helix-imu.ino
+│   └── helix-mic/          # Zephyr RTOS (nRF Connect SDK v2.5.0)
+│       ├── CMakeLists.txt
+│       ├── prj.conf
+│       ├── boards/
+│       └── src/
 ├── apps/
-│   └── receiver-python/   # Python BLE receiver for testing
-│       ├── receiver.py
-│       └── scan.py
-└── README.md
+│   ├── helix-imu/              # Python BLE receiver (testing)
+│   │   ├── receiver.py
+│   │   └── scan.py
+│   ├── helix-imu-android/      # Android app — live orientation + visualiser
+│   └── helix-mic-android/      # Android app — audio stream + Whisper STT
+└── hardware/                   # 3D models (coming soon)
 ```
 
-## Getting Started (IMU Module)
+## BLE Protocol
 
-### 1. Flash Firmware
+All Helix modules share a common service UUID with module-specific characteristics.
 
-1. Install [Arduino IDE](https://www.arduino.cc/en/software)
-2. Add Seeed nRF52 boards: `https://files.seeedstudio.com/arduino/package_seeeduino_arduino_board_index.json`
-3. Install **"Seeed nRF52 Boards"** package (NOT mbed-enabled)
-4. Install **"Seeed Arduino LSM6DS3"** library
-5. Select **"Seeed XIAO BLE Sense - nRF52840"** as board
-6. Open `firmware/helix.ino` and upload
+**Service UUID:** `917649A0-D98E-11E5-9EEC-0002A5D5C51B`
 
-### 2. Run Receiver
+| Characteristic | UUID | Module | Format |
+|---|---|---|---|
+| Orientation | `917649A1-...` | IMU | 3x float32 (roll, pitch, yaw °) |
+| Battery | `917649A2-...` | IMU, Mic | uint8 (0–100%) |
+| Temperature | `917649A3-...` | IMU | float32 (°C) |
+| Audio | `917649B0-...` | Mic | [seq:2][flags:1][pcm data] |
+
+## Getting Started
+
+### Helix IMU
+
+**Flash firmware (Arduino):**
+1. Install Arduino IDE
+2. Add board URL: `https://files.seeedstudio.com/arduino/package_seeeduino_arduino_board_index.json`
+3. Install **Seeed nRF52 Boards** (non-mbed variant)
+4. Install **Seeed Arduino LSM6DS3** library
+5. Select **Seeed XIAO BLE Sense - nRF52840**
+6. Open `firmware/helix-imu/helix-imu.ino` and upload
+
+**Android app:**
+Open `apps/helix-imu-android/` in Android Studio and run.
+
+Features: live roll/pitch/yaw display, 3D direction visualiser, calibration, battery %, temperature.
+
+### Helix Mic
+
+**Flash firmware (Zephyr):**
+1. Build with nRF Connect SDK v2.5.0
+2. Double-tap reset on XIAO to enter bootloader
+3. Drag `zephyr.uf2` onto the `XIAO-SENSE` drive
+
+**Android app:**
+Open `apps/helix-mic-android/` in Android Studio and run.
+
+Features: BLE audio receive, WAV buffering, Whisper API transcription.
+
+## Building Firmware (Server)
+
+nRF Connect SDK is set up on the build server.
 
 ```bash
-cd apps/receiver-python
-pip install bleak
-python receiver.py
+# Helix Mic (Zephyr)
+cd ~/nrf-sdk/zephyr
+west build -b xiao_ble ~/clawd/repos/helix/firmware/helix-mic
+
+# Output
+build/zephyr/zephyr.uf2
 ```
-
-## Hardware (IMU Module)
-
-- **MCU**: Seeed XIAO nRF52840 Sense (BLE + onboard LSM6DS3 IMU)
-- **Battery**: LP502030 250mAh LiPo
-- **Switch**: Slide switch in series with battery
-- **Enclosure**: 3D printed module, magnetically attaches to ear clip
 
 ## Status
 
-🚧 **Prototype phase** — firmware working, ear clip printed, module enclosure in progress
+| Module | Firmware | Android App | Hardware |
+|---|---|---|---|
+| Helix IMU | ✅ Working | ✅ Working | 🚧 Enclosure in progress |
+| Helix Mic | ✅ Advertising | 🚧 In progress | ⬜ Not started |
 
 ## License
 
