@@ -1,0 +1,256 @@
+package com.helix.mic
+
+import android.annotation.SuppressLint
+import android.bluetooth.*
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.content.Context
+import android.os.ParcelUuid
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
+
+val SERVICE_UUID: UUID = UUID.fromString("917649A0-D98E-11E5-9EEC-0002A5D5C51B")
+val AUDIO_UUID: UUID = UUID.fromString("917649B0-D98E-11E5-9EEC-0002A5D5C51B")
+val BATTERY_UUID: UUID = UUID.fromString("917649A2-D98E-11E5-9EEC-0002A5D5C51B")
+val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+const val DEVICE_NAME = "Helix-Mic"
+
+// Audio packet format: [seq_num: uint16][flags: uint8][audio data bytes]
+// flags bit 0: 0 = Opus, 1 = raw PCM 16kHz 16-bit mono
+data class AudioPacket(
+    val seqNum: Int,
+    val isRawPcm: Boolean,
+    val data: ByteArray
+) {
+    companion object {
+        fun parse(bytes: ByteArray): AudioPacket? {
+            if (bytes.size < 3) return null
+            val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val seqNum = buf.short.toInt() and 0xFFFF
+            val flags = buf.get().toInt() and 0xFF
+            val isRawPcm = (flags and 0x01) != 0
+            val audioData = bytes.copyOfRange(3, bytes.size)
+            return AudioPacket(seqNum, isRawPcm, audioData)
+        }
+    }
+    
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as AudioPacket
+        if (seqNum != other.seqNum) return false
+        if (isRawPcm != other.isRawPcm) return false
+        if (!data.contentEquals(other.data)) return false
+        return true
+    }
+    
+    override fun hashCode(): Int {
+        var result = seqNum
+        result = 31 * result + isRawPcm.hashCode()
+        result = 31 * result + data.contentHashCode()
+        return result
+    }
+}
+
+enum class ConnectionState { DISCONNECTED, SCANNING, CONNECTING, CONNECTED }
+
+@SuppressLint("MissingPermission")
+class HelixMicBleManager(private val context: Context) {
+
+    private val bluetoothAdapter: BluetoothAdapter? =
+        (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+
+    private var gatt: BluetoothGatt? = null
+
+    // GATT operation queue — one at a time
+    private val gattQueue = ConcurrentLinkedQueue<() -> Unit>()
+    private var gattBusy = false
+
+    private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+    val connectionState: StateFlow<ConnectionState> = _connectionState
+
+    private val _deviceAddress = MutableStateFlow<String?>(null)
+    val deviceAddress: StateFlow<String?> = _deviceAddress
+
+    private val _batteryPercent = MutableStateFlow<Int?>(null)
+    val batteryPercent: StateFlow<Int?> = _batteryPercent
+
+    private val _isReceivingAudio = MutableStateFlow(false)
+    val isReceivingAudio: StateFlow<Boolean> = _isReceivingAudio
+
+    // Rolling audio buffer - stores raw PCM data
+    private val _audioBuffer = MutableStateFlow<ByteArray>(ByteArray(0))
+    val audioBuffer: StateFlow<ByteArray> = _audioBuffer
+    
+    private val _packetCount = MutableStateFlow(0)
+    val packetCount: StateFlow<Int> = _packetCount
+
+    // Maximum buffer size (roughly 10 seconds of 16kHz 16-bit mono audio = 320,000 bytes)
+    private val maxBufferSize = 320_000
+
+    // Queue a GATT operation and execute if not busy
+    private fun enqueue(op: () -> Unit) {
+        gattQueue.add(op)
+        if (!gattBusy) nextGattOp()
+    }
+
+    private fun nextGattOp() {
+        val op = gattQueue.poll()
+        if (op != null) {
+            gattBusy = true
+            op()
+        } else {
+            gattBusy = false
+        }
+    }
+
+    private val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val deviceName = result.device.name
+            if (deviceName == DEVICE_NAME) {
+                bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
+                _connectionState.value = ConnectionState.CONNECTING
+                _deviceAddress.value = result.device.address
+                result.device.connectGatt(context, false, gattCallback)
+            }
+        }
+    }
+
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                this@HelixMicBleManager.gatt = gatt
+                gatt.discoverServices()
+            } else {
+                _connectionState.value = ConnectionState.DISCONNECTED
+                _deviceAddress.value = null
+                _batteryPercent.value = null
+                _isReceivingAudio.value = false
+                this@HelixMicBleManager.gatt = null
+                gattQueue.clear()
+                gattBusy = false
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            // Request highest priority (7.5ms interval)
+            gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+            val service = gatt.getService(SERVICE_UUID) ?: return
+
+            // Enable audio notifications
+            service.getCharacteristic(AUDIO_UUID)?.let { char ->
+                enqueue {
+                    gatt.setCharacteristicNotification(char, true)
+                    char.getDescriptor(CCCD_UUID)?.let {
+                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(it)
+                    } ?: nextGattOp()
+                }
+            }
+
+            // Enable battery notifications + initial read
+            service.getCharacteristic(BATTERY_UUID)?.let { char ->
+                enqueue {
+                    gatt.setCharacteristicNotification(char, true)
+                    char.getDescriptor(CCCD_UUID)?.let {
+                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(it)
+                    } ?: nextGattOp()
+                }
+                enqueue { gatt.readCharacteristic(char) }
+            }
+
+            _connectionState.value = ConnectionState.CONNECTED
+        }
+
+        override fun onDescriptorWrite(
+            gatt: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int
+        ) {
+            nextGattOp()
+        }
+
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                when (characteristic.uuid) {
+                    BATTERY_UUID -> _batteryPercent.value =
+                        characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+                }
+            }
+            nextGattOp()
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            when (characteristic.uuid) {
+                AUDIO_UUID -> {
+                    val packet = AudioPacket.parse(characteristic.value) ?: return
+                    if (packet.isRawPcm) {
+                        // Append PCM data to buffer
+                        val currentBuffer = _audioBuffer.value
+                        val newBuffer = currentBuffer + packet.data
+                        
+                        // Keep buffer size in check (rolling)
+                        val trimmedBuffer = if (newBuffer.size > maxBufferSize) {
+                            newBuffer.copyOfRange(newBuffer.size - maxBufferSize, newBuffer.size)
+                        } else {
+                            newBuffer
+                        }
+                        
+                        _audioBuffer.value = trimmedBuffer
+                        _packetCount.value = _packetCount.value + 1
+                        _isReceivingAudio.value = true
+                    }
+                }
+                BATTERY_UUID -> _batteryPercent.value =
+                    characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+            }
+        }
+    }
+
+    fun startScan() {
+        _connectionState.value = ConnectionState.SCANNING
+        val filter = ScanFilter.Builder()
+            .setDeviceName(DEVICE_NAME)
+            .build()
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        bluetoothAdapter?.bluetoothLeScanner?.startScan(listOf(filter), settings, scanCallback)
+    }
+
+    fun disconnect() {
+        gatt?.disconnect()
+        gatt?.close()
+        gatt = null
+        gattQueue.clear()
+        gattBusy = false
+        _connectionState.value = ConnectionState.DISCONNECTED
+        _deviceAddress.value = null
+        _batteryPercent.value = null
+        _isReceivingAudio.value = false
+    }
+
+    fun clearAudioBuffer() {
+        _audioBuffer.value = ByteArray(0)
+        _packetCount.value = 0
+    }
+    
+    fun getAudioBufferForTranscription(): ByteArray {
+        return _audioBuffer.value
+    }
+}
