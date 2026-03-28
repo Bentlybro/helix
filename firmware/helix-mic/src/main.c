@@ -170,11 +170,21 @@ static void audio_frame_handler(int16_t *buf, size_t num_samples)
             chunk = BLE_AUDIO_CHUNK_BYTES;
         }
         
-        int ret = transport_send_audio(pcm + offset, chunk, audio_seq++, 0x01);
+        int ret;
+        int retries = 0;
+        do {
+            ret = transport_send_audio(pcm + offset, chunk, audio_seq, 0x01);
+            if (ret == -ENOBUFS || ret == -ENOMEM) {
+                k_sleep(K_MSEC(5)); /* yield to let BLE stack drain */
+                retries++;
+            }
+        } while ((ret == -ENOBUFS || ret == -ENOMEM) && retries < 10);
+        
         if (ret < 0) {
-            LOG_DBG("Send failed at offset %zu: %d", offset, ret);
+            LOG_DBG("Send failed at offset %zu: %d (after %d retries)", offset, ret, retries);
             break;
         }
+        audio_seq++;
         offset += chunk;
     }
 }
