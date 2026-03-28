@@ -8,7 +8,9 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -40,7 +42,7 @@ data class AudioPacket(
             return AudioPacket(seqNum, isRawPcm, audioData)
         }
     }
-    
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -50,7 +52,7 @@ data class AudioPacket(
         if (!data.contentEquals(other.data)) return false
         return true
     }
-    
+
     override fun hashCode(): Int {
         var result = seqNum
         result = 31 * result + isRawPcm.hashCode()
@@ -85,21 +87,14 @@ class HelixMicBleManager(private val context: Context) {
     private val _isReceivingAudio = MutableStateFlow(false)
     val isReceivingAudio: StateFlow<Boolean> = _isReceivingAudio
 
-    // Rolling audio buffer — store chunks, concatenate only when needed
-    private val audioChunks = ArrayDeque<ByteArray>()
-    private var totalAudioBytes = 0
-    private val audioLock = Any()
-    private val maxBufferBytes = 320_000 // ~10s at 16kHz 16-bit mono
     private var packetCounter = 0
-
-    private val _audioBuffer = MutableStateFlow<ByteArray>(ByteArray(0))
-    val audioBuffer: StateFlow<ByteArray> = _audioBuffer
 
     private val _packetCount = MutableStateFlow(0)
     val packetCount: StateFlow<Int> = _packetCount
 
-    private val _totalAudioBytes = MutableStateFlow(0)
-    val totalAudioBytesFlow: StateFlow<Int> = _totalAudioBytes
+    // Raw audio frame flow — TranscriptionService consumes this
+    private val _audioFrames = MutableSharedFlow<ByteArray>(extraBufferCapacity = 256)
+    val audioFrames: SharedFlow<ByteArray> = _audioFrames
 
     // Queue a GATT operation and execute if not busy
     private fun enqueue(op: () -> Unit) {
@@ -133,7 +128,6 @@ class HelixMicBleManager(private val context: Context) {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 this@HelixMicBleManager.gatt = gatt
-                // Request larger MTU first — need >23 for audio streaming
                 gatt.requestMtu(247)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 _connectionState.value = ConnectionState.DISCONNECTED
@@ -148,7 +142,6 @@ class HelixMicBleManager(private val context: Context) {
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             android.util.Log.d("HelixMic", "MTU changed to $mtu (status=$status)")
-            // Now discover services after MTU is negotiated
             gatt.discoverServices()
         }
 
@@ -160,26 +153,23 @@ class HelixMicBleManager(private val context: Context) {
                 android.util.Log.e("HelixMic", "Service $SERVICE_UUID NOT FOUND!")
                 return
             }
-            android.util.Log.d("HelixMic", "Service found! Characteristics: ${service.characteristics.map { it.uuid }}")
 
-            // Subscribe to audio first — this is the critical one that starts the mic
+            // Subscribe to audio notifications
             val audioChar = service.getCharacteristic(AUDIO_UUID)
             if (audioChar == null) {
                 android.util.Log.e("HelixMic", "Audio characteristic $AUDIO_UUID NOT FOUND!")
             } else {
-                android.util.Log.d("HelixMic", "Writing audio CCCD...")
                 gatt.setCharacteristicNotification(audioChar, true)
                 val desc = audioChar.getDescriptor(CCCD_UUID)
                 if (desc == null) {
                     android.util.Log.e("HelixMic", "Audio CCCD descriptor NOT FOUND!")
                 } else {
                     desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    val result = gatt.writeDescriptor(desc)
-                    android.util.Log.d("HelixMic", "writeDescriptor(audio) result=$result")
+                    gatt.writeDescriptor(desc)
                 }
             }
 
-            // Queue battery after a short delay to avoid collisions
+            // Queue battery subscription
             service.getCharacteristic(BATTERY_UUID)?.let { char ->
                 enqueue {
                     gatt.setCharacteristicNotification(char, true)
@@ -223,8 +213,6 @@ class HelixMicBleManager(private val context: Context) {
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
-            // Extract UUID and value immediately — Android 16 invalidates the object
-            // after this callback returns, so we must copy everything up front
             val uuid = characteristic.uuid
             val value = characteristic.value?.copyOf() ?: return
 
@@ -232,19 +220,12 @@ class HelixMicBleManager(private val context: Context) {
                 AUDIO_UUID -> {
                     val packet = AudioPacket.parse(value) ?: return
                     if (packet.data.isNotEmpty()) {
-                        synchronized(audioLock) {
-                            audioChunks.add(packet.data)
-                            totalAudioBytes += packet.data.size
-                            // Trim from front if over limit
-                            while (totalAudioBytes > maxBufferBytes && audioChunks.isNotEmpty()) {
-                                totalAudioBytes -= audioChunks.removeFirst().size
-                            }
-                        }
+                        // Emit to SharedFlow for TranscriptionService
+                        _audioFrames.tryEmit(packet.data)
+
                         packetCounter++
-                        // Only update UI every 50 packets to avoid flooding Compose
                         if (packetCounter % 50 == 0) {
                             _packetCount.value = packetCounter
-                            _totalAudioBytes.value = totalAudioBytes
                         }
                         _isReceivingAudio.value = true
                     }
@@ -278,27 +259,9 @@ class HelixMicBleManager(private val context: Context) {
         _isReceivingAudio.value = false
     }
 
-    fun clearAudioBuffer() {
-        synchronized(audioLock) {
-            audioChunks.clear()
-            totalAudioBytes = 0
-        }
-        _audioBuffer.value = ByteArray(0)
+    fun resetPacketCount() {
+        packetCounter = 0
         _packetCount.value = 0
-        _totalAudioBytes.value = 0
         _isReceivingAudio.value = false
-    }
-
-    /** Concatenate all chunks into a single ByteArray — only call when transcribing */
-    fun getAudioBufferForTranscription(): ByteArray {
-        synchronized(audioLock) {
-            val result = ByteArray(totalAudioBytes)
-            var offset = 0
-            for (chunk in audioChunks) {
-                chunk.copyInto(result, offset)
-                offset += chunk.size
-            }
-            return result
-        }
     }
 }
