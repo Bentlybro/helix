@@ -179,12 +179,6 @@ int main(void)
         bool now_connected = transport_is_connected();
 
         if (now_connected) {
-            /* Fallback: if connected but mic not running, start it */
-            if (!mic_running) {
-                LOG_WRN("Mic not running on connect - starting now (fallback)");
-                on_connect_start_mic();
-            }
-            
             /* Update battery level periodically */
             uint8_t level = read_battery_level();
             transport_update_battery(level);
