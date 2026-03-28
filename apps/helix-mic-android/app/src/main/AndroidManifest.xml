@@ -22,7 +22,8 @@
         android:allowBackup="true"
         android:label="Helix Mic"
         android:theme="@style/Theme.HelixMic"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

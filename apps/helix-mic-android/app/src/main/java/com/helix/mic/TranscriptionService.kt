@@ -68,7 +68,7 @@ class TranscriptionService(private val apiKey: String) {
         _partialText.value = ""
         _error.value = null
         synchronized(audioBufferLock) { audioBuffer.clear() }
-        voiceProfileManager?.resetSessionSpeakers()
+        // Speaker identification is now server-side (local server mode)
         connectWebSocket()
         Log.d(TAG, "TranscriptionService started")
     }
@@ -227,16 +227,9 @@ class TranscriptionService(private val apiKey: String) {
                 "conversation.item.input_audio_transcription.completed" -> {
                     val transcript = json.optString("transcript", "").trim()
                     if (transcript.isNotEmpty()) {
-                        // Identify speaker from buffered audio
-                        val speaker = try {
-                            val bufferedAudio = consumeAudioBuffer()
-                            if (bufferedAudio.isNotEmpty()) {
-                                voiceProfileManager?.identifySpeaker(bufferedAudio)
-                            } else null
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Speaker identification failed", e)
-                            null
-                        }
+                        // Speaker identification is now server-side (local server mode)
+                        // OpenAI Realtime path doesn't support speaker ID
+                        val speaker: String? = null
 
                         val segment = TranscriptSegment(
                             text = transcript,

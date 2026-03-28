@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,7 +65,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class Screen { MAIN, SETTINGS, SESSIONS, SESSION_DETAIL }
+enum class Screen { MAIN, SETTINGS, SESSIONS, SESSION_DETAIL, VOICE_ENROLL }
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -80,6 +81,8 @@ fun HelixMicApp(
 
     var currentScreen by remember { mutableStateOf(Screen.MAIN) }
     var apiKey by remember { mutableStateOf(sharedPrefs.getString("openai_api_key", "") ?: "") }
+    var useLocalServer by remember { mutableStateOf(sharedPrefs.getBoolean("use_local_server", false)) }
+    var serverUrl by remember { mutableStateOf(sharedPrefs.getString("server_url", "ws://192.168.0.35:8770/ws/stream") ?: "ws://192.168.0.35:8770/ws/stream") }
 
     // Session state
     var isRecording by remember { mutableStateOf(false) }
@@ -96,27 +99,43 @@ fun HelixMicApp(
     val voiceProfileManager = remember { VoiceProfileManager(context) }
     var isVoiceEnrolled by remember { mutableStateOf(voiceProfileManager.isEnrolled) }
 
-    // TranscriptionService — now uses Realtime WebSocket
-    val transcriptionService = remember(apiKey) {
+    // Transcription: either OpenAI Realtime or Local Server
+    val openAiService = remember(apiKey) {
         if (apiKey.isNotBlank()) {
             TranscriptionService(apiKey).also {
                 it.voiceProfileManager = voiceProfileManager
             }
         } else null
     }
+    val localServerClient = remember(serverUrl) {
+        LocalServerClient(serverUrl)
+    }
 
-    val segments by (transcriptionService?.segments ?: MutableStateFlow(emptyList())).collectAsState()
-    val partialText by (transcriptionService?.partialText ?: MutableStateFlow("")).collectAsState()
-    val isConnected by (transcriptionService?.isConnected ?: MutableStateFlow(false)).collectAsState()
-    val transcriptionError by (transcriptionService?.error ?: MutableStateFlow<String?>(null)).collectAsState()
+    // Clean up clients on dispose
+    DisposableEffect(Unit) {
+        onDispose {
+            openAiService?.destroy()
+            localServerClient.destroy()
+        }
+    }
+
+    // Expose the active service's flows
+    val segments by (if (useLocalServer) localServerClient.segments else (openAiService?.segments ?: MutableStateFlow(emptyList()))).collectAsState()
+    val partialText by (if (useLocalServer) localServerClient.partialText else (openAiService?.partialText ?: MutableStateFlow(""))).collectAsState()
+    val isConnected by (if (useLocalServer) localServerClient.isConnected else (openAiService?.isConnected ?: MutableStateFlow(false))).collectAsState()
+    val transcriptionError by (if (useLocalServer) localServerClient.error else (openAiService?.error ?: MutableStateFlow<String?>(null))).collectAsState()
 
     val scope = rememberCoroutineScope()
 
-    // Collect BLE audio frames and feed to TranscriptionService
-    LaunchedEffect(transcriptionService, isRecording) {
-        if (transcriptionService != null && isRecording) {
+    // Collect BLE audio frames and feed to active transcription service
+    LaunchedEffect(useLocalServer, openAiService, isRecording) {
+        if (isRecording) {
             bleManager.audioFrames.collect { frame ->
-                transcriptionService.feedAudio(frame)
+                if (useLocalServer) {
+                    localServerClient.feedAudio(frame)
+                } else {
+                    openAiService?.feedAudio(frame)
+                }
             }
         }
     }
@@ -171,10 +190,35 @@ fun HelixMicApp(
                             apiKey = newKey
                             sharedPrefs.edit().putString("openai_api_key", newKey).apply()
                         },
+                        useLocalServer = useLocalServer,
+                        onUseLocalServerChange = { enabled ->
+                            useLocalServer = enabled
+                            sharedPrefs.edit().putBoolean("use_local_server", enabled).apply()
+                        },
+                        serverUrl = serverUrl,
+                        onServerUrlChange = { url ->
+                            serverUrl = url
+                            sharedPrefs.edit().putString("server_url", url).apply()
+                        },
                         voiceProfileManager = voiceProfileManager,
                         isVoiceEnrolled = isVoiceEnrolled,
                         onEnrollmentChanged = { isVoiceEnrolled = it },
+                        isConnected = connectionState == ConnectionState.CONNECTED,
+                        onStartEnrollment = { currentScreen = Screen.VOICE_ENROLL },
                         onBack = { currentScreen = Screen.MAIN }
+                    )
+                }
+                Screen.VOICE_ENROLL -> {
+                    VoiceEnrollmentScreen(
+                        bleManager = bleManager,
+                        voiceProfileManager = voiceProfileManager,
+                        serverUrl = serverUrl,
+                        isDeviceConnected = connectionState == ConnectionState.CONNECTED,
+                        onComplete = { enrolled ->
+                            isVoiceEnrolled = enrolled
+                            currentScreen = Screen.SETTINGS
+                        },
+                        onBack = { currentScreen = Screen.SETTINGS }
                     )
                 }
                 Screen.SESSIONS -> {
@@ -341,19 +385,23 @@ fun HelixMicApp(
                             // ── Bottom Bar ──
                             BottomControlBar(
                                 isRecording = isRecording,
-                                canRecord = apiKey.isNotBlank(),
+                                canRecord = useLocalServer || apiKey.isNotBlank(),
                                 pulseScale = pulseScale,
                                 packetCount = packetCount,
                                 onRecord = {
-                                    if (apiKey.isBlank()) {
-                                        Toast.makeText(context, "Set API key in settings first", Toast.LENGTH_SHORT).show()
+                                    if (!useLocalServer && apiKey.isBlank()) {
+                                        Toast.makeText(context, "Set API key or enable local server in settings", Toast.LENGTH_SHORT).show()
                                         return@BottomControlBar
                                     }
                                     if (!isRecording) {
                                         // Start recording
                                         summary = null
                                         sessionSaved = false
-                                        transcriptionService?.start()
+                                        if (useLocalServer) {
+                                            localServerClient.start()
+                                        } else {
+                                            openAiService?.start()
+                                        }
                                         bleManager.resetPacketCount()
                                         currentSessionId = sessionManager.startSession()
                                         sessionStartTime = System.currentTimeMillis()
@@ -361,7 +409,11 @@ fun HelixMicApp(
                                     } else {
                                         // Stop recording
                                         isRecording = false
-                                        transcriptionService?.stop()
+                                        if (useLocalServer) {
+                                            localServerClient.stop()
+                                        } else {
+                                            openAiService?.stop()
+                                        }
                                         val finalSegments = segments.toList()
 
                                         // Generate summary
@@ -386,7 +438,11 @@ fun HelixMicApp(
                                 onDisconnect = {
                                     if (isRecording) {
                                         isRecording = false
-                                        transcriptionService?.stop()
+                                        if (useLocalServer) {
+                                            localServerClient.stop()
+                                        } else {
+                                            openAiService?.stop()
+                                        }
                                     }
                                     bleManager.disconnect()
                                 }
@@ -429,7 +485,7 @@ fun TopStatusBar(
                     ConnectionState.DISCONNECTED -> "Disconnected"
                     ConnectionState.SCANNING -> "Scanning..."
                     ConnectionState.CONNECTING -> "Connecting..."
-                    ConnectionState.CONNECTED -> if (isWsConnected) "Live" else "Connected"
+                    ConnectionState.CONNECTED -> if (isWsConnected) "Live" else "Connected"  // TODO: show "Local" indicator
                 },
                 fontSize = 13.sp,
                 color = Color.Gray
@@ -496,7 +552,7 @@ fun LiveTranscriptView(
                 ) {
                     Text(
                         text = if (isRecording) {
-                            if (isConnected) "Listening..." else "Connecting to OpenAI..."
+                            if (isConnected) "Listening..." else "Connecting..."
                         } else "Tap record to start",
                         fontSize = 16.sp,
                         color = Color(0xFF444444)
@@ -896,26 +952,24 @@ fun StatusDot(state: ConnectionState) {
         .background(color))
 }
 
-@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun SettingsScreen(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
+    useLocalServer: Boolean,
+    onUseLocalServerChange: (Boolean) -> Unit,
+    serverUrl: String,
+    onServerUrlChange: (String) -> Unit,
     voiceProfileManager: VoiceProfileManager,
     isVoiceEnrolled: Boolean,
     onEnrollmentChanged: (Boolean) -> Unit,
+    isConnected: Boolean,
+    onStartEnrollment: () -> Unit,
     onBack: () -> Unit
 ) {
     var showKey by remember { mutableStateOf(false) }
-    var isEnrolling by remember { mutableStateOf(false) }
-    var enrollProgress by remember { mutableStateOf(0f) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-
-    // Audio recording permission
-    val audioPermission = rememberMultiplePermissionsState(
-        permissions = listOf(android.Manifest.permission.RECORD_AUDIO)
-    )
 
     Column(
         modifier = Modifier
@@ -930,7 +984,7 @@ fun SettingsScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Text("←", fontSize = 24.sp, color = Color.White)
+                Text("\u2190", fontSize = 24.sp, color = Color.White)
             }
             Text(
                 "Settings",
@@ -976,19 +1030,80 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(32.dp))
 
+        // ── Local Server Section ──
+        Text("Transcription Backend", fontSize = 14.sp, color = Color.Gray)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Use Local Server",
+                    fontSize = 15.sp,
+                    color = Color.White
+                )
+                Text(
+                    if (useLocalServer) "Streaming to local Helix STT server" else "Using OpenAI Realtime API",
+                    fontSize = 12.sp,
+                    color = Color(0xFF666666)
+                )
+            }
+            Switch(
+                checked = useLocalServer,
+                onCheckedChange = onUseLocalServerChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Color(0xFFFF4444),
+                    uncheckedThumbColor = Color(0xFF888888),
+                    uncheckedTrackColor = Color(0xFF333333)
+                )
+            )
+        }
+
+        if (useLocalServer) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("Server URL", fontSize = 13.sp, color = Color.Gray)
+            Spacer(modifier = Modifier.height(4.dp))
+            OutlinedTextField(
+                value = serverUrl,
+                onValueChange = onServerUrlChange,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("ws://192.168.0.35:8770/ws/stream", color = Color(0xFF444444)) },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFFFF4444),
+                    unfocusedBorderColor = Color(0xFF333333),
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                )
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Raw PCM audio is sent directly -- no API key needed for local server.",
+                fontSize = 12.sp,
+                color = Color(0xFF666666)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
         // ── Voice Profile Section ──
         Text("Voice Profile", fontSize = 14.sp, color = Color.Gray)
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            "Enroll your voice so the app can label transcript segments as \"You\" vs other speakers.",
+            "Enroll your voice so the server can label transcript segments as your name vs other speakers.",
             fontSize = 12.sp,
             color = Color(0xFF666666)
         )
         Spacer(modifier = Modifier.height(12.dp))
 
         // Status
+        val enrolledName = voiceProfileManager.enrolledName
         Text(
-            text = if (isVoiceEnrolled) "✓ Voice enrolled" else "Not enrolled",
+            text = if (isVoiceEnrolled && enrolledName != null) "Enrolled as \"$enrolledName\"" else "Not enrolled",
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
             color = if (isVoiceEnrolled) Color(0xFF00CC88) else Color(0xFF888888)
@@ -996,147 +1111,450 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        if (isEnrolling) {
-            // Recording progress
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = {
+                    if (!isConnected) {
+                        Toast.makeText(context, "Connect Helix-Mic first", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    if (!useLocalServer) {
+                        Toast.makeText(context, "Enable local server to use voice enrollment", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    onStartEnrollment()
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFFF4444)
+                ),
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
-                    "Recording your voice...",
-                    fontSize = 14.sp,
-                    color = Color(0xFFFF4444)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { enrollProgress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp),
-                    color = Color(0xFFFF4444),
-                    trackColor = Color(0xFF333333),
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "Speak naturally for 10 seconds",
-                    fontSize = 12.sp,
-                    color = Color(0xFF888888)
+                    if (isVoiceEnrolled) "Re-enroll Voice" else "Set Up Voice Profile",
+                    color = Color.White,
+                    fontSize = 14.sp
                 )
             }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
+
+            if (isVoiceEnrolled) {
+                OutlinedButton(
                     onClick = {
-                        if (!audioPermission.allPermissionsGranted) {
-                            audioPermission.launchMultiplePermissionRequest()
-                            return@Button
-                        }
-                        isEnrolling = true
-                        enrollProgress = 0f
                         scope.launch(Dispatchers.IO) {
-                            try {
-                                val pcmData = recordEnrollmentAudio(
-                                    durationMs = 10_000,
-                                    onProgress = { progress ->
-                                        enrollProgress = progress
-                                    }
-                                )
-                                voiceProfileManager.enroll(pcmData)
-                                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                    isEnrolling = false
-                                    onEnrollmentChanged(voiceProfileManager.isEnrolled)
-                                    if (voiceProfileManager.isEnrolled) {
-                                        Toast.makeText(context, "Voice enrolled!", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, "Enrollment failed — try speaking louder", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                    isEnrolling = false
-                                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
+                            voiceProfileManager.clearProfile(serverUrl)
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                onEnrollmentChanged(false)
+                                Toast.makeText(context, "Voice profile cleared", Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF4444)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        if (isVoiceEnrolled) "Re-enroll Voice" else "Enroll Voice",
-                        color = Color.White,
-                        fontSize = 14.sp
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFF888888)
                     )
-                }
-
-                if (isVoiceEnrolled) {
-                    OutlinedButton(
-                        onClick = {
-                            voiceProfileManager.clearProfile()
-                            onEnrollmentChanged(false)
-                            Toast.makeText(context, "Voice profile cleared", Toast.LENGTH_SHORT).show()
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color(0xFF888888)
-                        )
-                    ) {
-                        Text("Clear Profile", fontSize = 14.sp)
-                    }
+                ) {
+                    Text("Clear Profile", fontSize = 14.sp)
                 }
             }
         }
     }
 }
 
-/**
- * Record audio from the device microphone for enrollment.
- * Returns raw PCM 16kHz 16-bit mono LE.
- */
-@Suppress("MissingPermission")
-fun recordEnrollmentAudio(
-    durationMs: Long = 10_000,
-    onProgress: (Float) -> Unit = {}
-): ByteArray {
-    val sampleRate = 16000
-    val bufferSize = android.media.AudioRecord.getMinBufferSize(
-        sampleRate,
-        android.media.AudioFormat.CHANNEL_IN_MONO,
-        android.media.AudioFormat.ENCODING_PCM_16BIT
-    )
-    val recorder = android.media.AudioRecord(
-        android.media.MediaRecorder.AudioSource.MIC,
-        sampleRate,
-        android.media.AudioFormat.CHANNEL_IN_MONO,
-        android.media.AudioFormat.ENCODING_PCM_16BIT,
-        bufferSize
+// ── Voice Enrollment Flow ──
+
+private val ENROLLMENT_PHRASES = listOf(
+    "The quick brown fox jumps over the lazy dog",
+    "I enjoy working on interesting projects every day",
+    "Hello, my name is %s and this is my voice",
+    "The weather today is quite nice for a walk outside",
+    "Technology keeps getting better and more accessible"
+)
+
+private const val PHRASE_DURATION_MS = 5000L
+
+enum class EnrollStep { INTRO, RECORDING, PROCESSING, COMPLETE, ERROR }
+
+@Composable
+fun VoiceEnrollmentScreen(
+    bleManager: HelixMicBleManager,
+    voiceProfileManager: VoiceProfileManager,
+    serverUrl: String,
+    isDeviceConnected: Boolean,
+    onComplete: (Boolean) -> Unit,
+    onBack: () -> Unit
+) {
+    var step by remember { mutableStateOf(EnrollStep.INTRO) }
+    var currentPhraseIndex by remember { mutableIntStateOf(0) }
+    var speakerName by remember { mutableStateOf(voiceProfileManager.enrolledName ?: "You") }
+    var recordingProgress by remember { mutableFloatStateOf(0f) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val pcmChunks = remember { mutableListOf<ByteArray>() }
+    val scope = rememberCoroutineScope()
+
+    // Pulse animation for recording indicator
+    val infiniteTransition = rememberInfiniteTransition(label = "enrollPulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
     )
 
-    val output = java.io.ByteArrayOutputStream()
-    val buffer = ByteArray(bufferSize)
-    val startTime = System.currentTimeMillis()
+    // Recording logic: when step is RECORDING, collect BLE audio for each phrase
+    LaunchedEffect(step, currentPhraseIndex) {
+        if (step == EnrollStep.RECORDING) {
+            recordingProgress = 0f
+            // Start collecting from BLE
+            voiceProfileManager.startCollecting(bleManager.audioFrames, scope)
 
-    recorder.startRecording()
-    try {
-        while (System.currentTimeMillis() - startTime < durationMs) {
-            val read = recorder.read(buffer, 0, buffer.size)
-            if (read > 0) {
-                output.write(buffer, 0, read)
+            // Count down for PHRASE_DURATION_MS
+            val startTime = System.currentTimeMillis()
+            while (System.currentTimeMillis() - startTime < PHRASE_DURATION_MS) {
+                val elapsed = System.currentTimeMillis() - startTime
+                recordingProgress = (elapsed.toFloat() / PHRASE_DURATION_MS).coerceIn(0f, 1f)
+                kotlinx.coroutines.delay(50)
             }
-            val elapsed = System.currentTimeMillis() - startTime
-            onProgress((elapsed.toFloat() / durationMs).coerceIn(0f, 1f))
+            recordingProgress = 1f
+
+            // Stop and save chunk
+            val chunk = voiceProfileManager.stopCollecting()
+            pcmChunks.add(chunk)
+
+            // Next phrase or process
+            if (currentPhraseIndex < ENROLLMENT_PHRASES.size - 1) {
+                currentPhraseIndex++
+                // Small pause between phrases
+                kotlinx.coroutines.delay(500)
+            } else {
+                // All phrases done, process
+                step = EnrollStep.PROCESSING
+            }
         }
-    } finally {
-        recorder.stop()
-        recorder.release()
     }
 
-    return output.toByteArray()
+    // Processing: combine chunks and send to server
+    LaunchedEffect(step) {
+        if (step == EnrollStep.PROCESSING) {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val totalSize = pcmChunks.sumOf { it.size }
+                val combined = ByteArray(totalSize)
+                var offset = 0
+                for (chunk in pcmChunks) {
+                    chunk.copyInto(combined, offset)
+                    offset += chunk.size
+                }
+
+                val result = voiceProfileManager.enrollOnServer(combined, speakerName, serverUrl)
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    if (result.success) {
+                        step = EnrollStep.COMPLETE
+                    } else {
+                        errorMessage = result.error
+                        step = EnrollStep.ERROR
+                    }
+                }
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Top bar with back
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (step == EnrollStep.INTRO || step == EnrollStep.COMPLETE || step == EnrollStep.ERROR) {
+                IconButton(onClick = onBack) {
+                    Text("\u2190", fontSize = 24.sp, color = Color.White)
+                }
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            // Progress dots
+            if (step == EnrollStep.RECORDING) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (i in ENROLLMENT_PHRASES.indices) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (i < currentPhraseIndex) Color(0xFF00CC88)
+                                    else if (i == currentPhraseIndex) Color(0xFFFF4444)
+                                    else Color(0xFF333333)
+                                )
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.weight(1f))
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        when (step) {
+            EnrollStep.INTRO -> {
+                Text(
+                    "Let's learn your voice",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    "Make sure Helix-Mic is connected and close to your mouth.",
+                    fontSize = 16.sp,
+                    color = Color(0xFF999999),
+                    lineHeight = 24.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "You'll read 5 short phrases aloud.",
+                    fontSize = 16.sp,
+                    color = Color(0xFF999999),
+                    lineHeight = 24.sp
+                )
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                // Name input
+                Text("Your name", fontSize = 13.sp, color = Color.Gray)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = speakerName,
+                    onValueChange = { speakerName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("You", color = Color(0xFF444444)) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFFF4444),
+                        unfocusedBorderColor = Color(0xFF333333),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                Button(
+                    onClick = {
+                        if (speakerName.isBlank()) speakerName = "You"
+                        pcmChunks.clear()
+                        currentPhraseIndex = 0
+                        step = EnrollStep.RECORDING
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    enabled = isDeviceConnected,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF4444),
+                        disabledContainerColor = Color(0xFF333333)
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        "Start",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+
+                if (!isDeviceConnected) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Connect Helix-Mic to continue",
+                        fontSize = 13.sp,
+                        color = Color(0xFFFF4444)
+                    )
+                }
+            }
+
+            EnrollStep.RECORDING -> {
+                // Recording indicator
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFF4444).copy(alpha = pulseAlpha))
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Recording...",
+                        fontSize = 14.sp,
+                        color = Color(0xFFFF4444).copy(alpha = pulseAlpha)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    "Phrase ${currentPhraseIndex + 1} of ${ENROLLMENT_PHRASES.size}",
+                    fontSize = 14.sp,
+                    color = Color(0xFF666666)
+                )
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                // The phrase
+                val phrase = ENROLLMENT_PHRASES[currentPhraseIndex].replace("%s", speakerName)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "\"$phrase\"",
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White,
+                            lineHeight = 32.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Progress bar
+                LinearProgressIndicator(
+                    progress = { recordingProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = Color(0xFFFF4444),
+                    trackColor = Color(0xFF333333),
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val secondsLeft = ((1f - recordingProgress) * (PHRASE_DURATION_MS / 1000f)).toInt()
+                Text(
+                    "${secondsLeft}s remaining",
+                    fontSize = 13.sp,
+                    color = Color(0xFF666666)
+                )
+            }
+
+            EnrollStep.PROCESSING -> {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(48.dp),
+                    color = Color(0xFFFF4444),
+                    strokeWidth = 4.dp
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Text(
+                    "Processing your voice profile...",
+                    fontSize = 18.sp,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "This may take a few seconds",
+                    fontSize = 14.sp,
+                    color = Color(0xFF666666)
+                )
+            }
+
+            EnrollStep.COMPLETE -> {
+                Text(
+                    "Voice profile created!",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF00CC88)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    "I'll recognize you during transcription.",
+                    fontSize = 16.sp,
+                    color = Color(0xFF999999)
+                )
+
+                Spacer(modifier = Modifier.height(48.dp))
+
+                Button(
+                    onClick = { onComplete(true) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF4444)
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        "Done",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+
+            EnrollStep.ERROR -> {
+                Text(
+                    "Enrollment failed",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFF4444)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    errorMessage ?: "Unknown error",
+                    fontSize = 16.sp,
+                    color = Color(0xFF999999)
+                )
+
+                Spacer(modifier = Modifier.height(48.dp))
+
+                Button(
+                    onClick = {
+                        pcmChunks.clear()
+                        currentPhraseIndex = 0
+                        errorMessage = null
+                        step = EnrollStep.INTRO
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF4444)
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        "Try Again",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+    }
 }
 
 fun formatDuration(totalSeconds: Long): String {
