@@ -70,14 +70,19 @@ static uint8_t battery_level = 100;
 /* Negotiated MTU (default minimum, updated after exchange) */
 static uint16_t current_mtu = 23;
 
+/* Track audio subscription state */
+static volatile bool audio_subscribed = false;
+
 /* ─── CCC callbacks ─────────────────────────────────────────────────── */
 
 static void audio_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     LOG_INF("Audio notifications %s", value ? "enabled" : "disabled");
     if (value == BT_GATT_CCC_NOTIFY) {
+        audio_subscribed = true;
         k_work_submit(&mic_start_work);
     } else {
+        audio_subscribed = false;
         k_work_submit(&mic_stop_work);
     }
 }
@@ -229,6 +234,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     }
 
     is_connected = false;
+    audio_subscribed = false;
     current_mtu = 23;
 
     k_work_submit(&mic_stop_work);
@@ -312,6 +318,11 @@ int transport_send_audio(const uint8_t *data, size_t len,
 {
     if (!is_connected || !current_conn) {
         return -ENOTCONN;
+    }
+    
+    /* Don't send until client has subscribed to audio notifications */
+    if (!audio_subscribed) {
+        return -EAGAIN;
     }
 
     /* Build packet: [seq_num:2][flags:1][payload] */
