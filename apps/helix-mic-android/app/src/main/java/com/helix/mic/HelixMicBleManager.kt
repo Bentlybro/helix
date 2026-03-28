@@ -142,22 +142,19 @@ class HelixMicBleManager(private val context: Context) {
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            // Request highest priority (7.5ms interval)
             gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
             val service = gatt.getService(SERVICE_UUID) ?: return
 
-            // Enable audio notifications
+            // Subscribe to audio first — this is the critical one that starts the mic
             service.getCharacteristic(AUDIO_UUID)?.let { char ->
-                enqueue {
-                    gatt.setCharacteristicNotification(char, true)
-                    char.getDescriptor(CCCD_UUID)?.let {
-                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        gatt.writeDescriptor(it)
-                    } ?: nextGattOp()
+                gatt.setCharacteristicNotification(char, true)
+                char.getDescriptor(CCCD_UUID)?.let { desc ->
+                    desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    gatt.writeDescriptor(desc)
                 }
             }
 
-            // Enable battery notifications + initial read
+            // Queue battery after a short delay to avoid collisions
             service.getCharacteristic(BATTERY_UUID)?.let { char ->
                 enqueue {
                     gatt.setCharacteristicNotification(char, true)
