@@ -40,10 +40,16 @@ static struct pcm_stream_cfg pcm_cfg = {
 };
 
 static struct dmic_cfg dmic_config = {
+    .io = {
+        /* nRF52840 PDM clock range for 16kHz sampling */
+        .min_pdm_clk_freq = 1000000,
+        .max_pdm_clk_freq = 3500000,
+    },
     .streams = &pcm_cfg,
     .channel = {
         .req_num_streams = 1,
         .req_num_chan = NUM_CHANNELS,
+        .req_chan_map_hi = 0,
     },
 };
 
@@ -54,6 +60,10 @@ int mic_init(void)
         LOG_ERR("PDM device not ready");
         return -ENODEV;
     }
+
+    /* Set channel map at runtime (dmic_build_channel_map is not constexpr) */
+    dmic_config.channel.req_chan_map_lo =
+        dmic_build_channel_map(0, 0, PDM_CHAN_LEFT);
 
     LOG_INF("PDM microphone initialized");
     return 0;
