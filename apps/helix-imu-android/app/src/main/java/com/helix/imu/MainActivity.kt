@@ -236,8 +236,8 @@ fun HeadVisualiser(orientation: Orientation) {
                 )
 
                 // Up arrow — yaw shows head turn direction
-                val upX = cx + r * 0.5f * sin(yawRad)
-                val upY = cy - r * 0.5f * cos(yawRad)
+                val upX = cx + r * 0.5f * sin(-yawRad)
+                val upY = cy - r * 0.5f * cos(-yawRad)
 
                 drawArrow(
                     start = Offset(cx, cy),
