@@ -224,9 +224,9 @@ fun HeadVisualiser(orientation: Orientation) {
                 // Device is mounted flat on side of head, USB pointing up
                 // Yaw = left/right turn, Pitch = nod up/down, Roll = tilt ear to shoulder
 
-                // Forward arrow — yaw sweeps left/right, pitch tilts up/down
-                val fwdX = cx + r * sin(yawRad)
-                val fwdY = cy - r * cos(yawRad) + r * 0.5f * sin(pitchRad)
+                // Forward arrow — pitch tilts up/down, roll sweeps left/right
+                val fwdX = cx + r * sin(rollRad)
+                val fwdY = cy - r * cos(rollRad) + r * 0.5f * sin(pitchRad)
 
                 drawArrow(
                     start = Offset(cx, cy),
@@ -235,9 +235,9 @@ fun HeadVisualiser(orientation: Orientation) {
                     strokeWidth = 4f
                 )
 
-                // Up arrow — shows roll (tilt)
-                val upX = cx + r * 0.5f * sin(rollRad)
-                val upY = cy - r * 0.5f * cos(rollRad)
+                // Up arrow — yaw shows head turn direction
+                val upX = cx + r * 0.5f * sin(yawRad)
+                val upY = cy - r * 0.5f * cos(yawRad)
 
                 drawArrow(
                     start = Offset(cx, cy),
