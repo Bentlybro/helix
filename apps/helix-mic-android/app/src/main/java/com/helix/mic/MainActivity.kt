@@ -224,6 +224,12 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                                             try {
                                                 val pcmData = bleManager.getAudioBufferForTranscription()
                                                 if (pcmData.isNotEmpty()) {
+                                                    val minBuf = AudioTrack.getMinBufferSize(
+                                                        16000,
+                                                        AudioFormat.CHANNEL_OUT_MONO,
+                                                        AudioFormat.ENCODING_PCM_16BIT
+                                                    )
+                                                    val bufSize = maxOf(pcmData.size, minBuf)
                                                     val audioTrack = AudioTrack.Builder()
                                                         .setAudioAttributes(
                                                             AudioAttributes.Builder()
@@ -239,11 +245,10 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                                                                 .build()
                                                         )
                                                         .setTransferMode(AudioTrack.MODE_STATIC)
-                                                        .setBufferSizeInBytes(pcmData.size)
+                                                        .setBufferSizeInBytes(bufSize)
                                                         .build()
                                                     audioTrack.write(pcmData, 0, pcmData.size)
                                                     audioTrack.play()
-                                                    // Wait for playback to finish
                                                     val durationMs = (pcmData.size / 32000f * 1000).toLong()
                                                     kotlinx.coroutines.delay(durationMs + 200)
                                                     audioTrack.stop()
