@@ -31,6 +31,9 @@ static volatile bool mic_running;
 /* Read timeout in ms */
 #define READ_TIMEOUT_MS 1000
 
+/* Software gain multiplier (Omi uses hardware gain 64 ≈ 4x our default) */
+#define SOFTWARE_GAIN_SHIFT 2  /* Multiply by 4 */
+
 static void mic_reader_entry(void *p1, void *p2, void *p3)
 {
 	ARG_UNUSED(p1);
@@ -54,7 +57,18 @@ static void mic_reader_entry(void *p1, void *p2, void *p3)
 
 		if (frame_callback && size > 0) {
 			size_t num_samples = size / BYTES_PER_SAMPLE;
-			frame_callback((int16_t *)buffer, num_samples);
+			int16_t *samples = (int16_t *)buffer;
+			
+			/* Apply software gain */
+			for (size_t i = 0; i < num_samples; i++) {
+				int32_t amp = (int32_t)samples[i] << SOFTWARE_GAIN_SHIFT;
+				/* Clamp to int16 range */
+				if (amp > 32767) amp = 32767;
+				if (amp < -32768) amp = -32768;
+				samples[i] = (int16_t)amp;
+			}
+			
+			frame_callback(samples, num_samples);
 		}
 
 		k_mem_slab_free(&mic_mem_slab, buffer);
