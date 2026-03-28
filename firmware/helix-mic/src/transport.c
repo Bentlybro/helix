@@ -37,6 +37,17 @@ static struct bt_uuid_128 helix_battery_uuid = BT_UUID_INIT_128(HELIX_BATTERY_UU
 static void audio_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     LOG_INF("Audio notifications %s", value ? "enabled" : "disabled");
+    if (value == BT_GATT_CCC_NOTIFY) {
+        /* App has subscribed — now safe to start streaming */
+        if (conn_callback) {
+            conn_callback(true);
+        }
+    } else {
+        /* App unsubscribed — stop streaming */
+        if (conn_callback) {
+            conn_callback(false);
+        }
+    }
 }
 
 static void battery_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
@@ -93,16 +104,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
     current_conn = bt_conn_ref(conn);
     is_connected = true;
     
-    LOG_INF("Connected");
-    
-    /* Start mic directly instead of relying on callback */
-    if (mic_start_fn) {
-        mic_start_fn();
-    }
-    
-    if (conn_callback) {
-        conn_callback(true);
-    }
+    LOG_INF("Connected — waiting for app to subscribe before streaming");
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
