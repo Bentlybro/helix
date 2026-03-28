@@ -51,6 +51,9 @@ static struct k_work mic_stop_work;
 
 static void mic_start_handler(struct k_work *work)
 {
+    if (mic_start_fn) {
+        mic_start_fn();
+    }
     if (conn_callback) {
         conn_callback(true);
     }
