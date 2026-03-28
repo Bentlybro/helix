@@ -86,10 +86,11 @@ class HelixMicBleManager(private val context: Context) {
     val isReceivingAudio: StateFlow<Boolean> = _isReceivingAudio
 
     // Rolling audio buffer — store chunks, concatenate only when needed
-    private val audioChunks = ArrayList<ByteArray>()
+    private val audioChunks = ArrayDeque<ByteArray>()
     private var totalAudioBytes = 0
     private val audioLock = Any()
     private val maxBufferBytes = 320_000 // ~10s at 16kHz 16-bit mono
+    private var packetCounter = 0
 
     private val _audioBuffer = MutableStateFlow<ByteArray>(ByteArray(0))
     val audioBuffer: StateFlow<ByteArray> = _audioBuffer
@@ -234,12 +235,17 @@ class HelixMicBleManager(private val context: Context) {
                         synchronized(audioLock) {
                             audioChunks.add(packet.data)
                             totalAudioBytes += packet.data.size
+                            // Trim from front if over limit
                             while (totalAudioBytes > maxBufferBytes && audioChunks.isNotEmpty()) {
-                                totalAudioBytes -= audioChunks.removeAt(0).size
+                                totalAudioBytes -= audioChunks.removeFirst().size
                             }
                         }
-                        _packetCount.value = _packetCount.value + 1
-                        _totalAudioBytes.value = totalAudioBytes
+                        packetCounter++
+                        // Only update UI every 50 packets to avoid flooding Compose
+                        if (packetCounter % 50 == 0) {
+                            _packetCount.value = packetCounter
+                            _totalAudioBytes.value = totalAudioBytes
+                        }
                         _isReceivingAudio.value = true
                     }
                 }
