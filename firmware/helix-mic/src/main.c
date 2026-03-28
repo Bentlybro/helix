@@ -14,8 +14,7 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #include <zephyr/device.h>
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/usb/usb_device.h>
-#include <zephyr/drivers/uart.h>
+
 
 #include "mic.h"
 #include "codec.h"
@@ -66,14 +65,6 @@ static volatile bool mic_running = false;
 int main(void)
 {
     int ret;
-    
-    /* Initialize USB CDC-ACM for serial logging */
-    ret = usb_enable(NULL);
-    if (ret < 0) {
-        printk("USB enable failed: %d\n", ret);
-    }
-    /* Wait for USB host enumeration so serial console is ready */
-    k_sleep(K_MSEC(1000));
     
     LOG_INF("Helix-Mic starting...");
     

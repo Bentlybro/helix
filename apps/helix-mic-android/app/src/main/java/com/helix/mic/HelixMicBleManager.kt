@@ -142,15 +142,29 @@ class HelixMicBleManager(private val context: Context) {
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            android.util.Log.d("HelixMic", "onServicesDiscovered status=$status services=${gatt.services.map { it.uuid }}")
             gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-            val service = gatt.getService(SERVICE_UUID) ?: return
+            val service = gatt.getService(SERVICE_UUID)
+            if (service == null) {
+                android.util.Log.e("HelixMic", "Service $SERVICE_UUID NOT FOUND!")
+                return
+            }
+            android.util.Log.d("HelixMic", "Service found! Characteristics: ${service.characteristics.map { it.uuid }}")
 
             // Subscribe to audio first — this is the critical one that starts the mic
-            service.getCharacteristic(AUDIO_UUID)?.let { char ->
-                gatt.setCharacteristicNotification(char, true)
-                char.getDescriptor(CCCD_UUID)?.let { desc ->
+            val audioChar = service.getCharacteristic(AUDIO_UUID)
+            if (audioChar == null) {
+                android.util.Log.e("HelixMic", "Audio characteristic $AUDIO_UUID NOT FOUND!")
+            } else {
+                android.util.Log.d("HelixMic", "Writing audio CCCD...")
+                gatt.setCharacteristicNotification(audioChar, true)
+                val desc = audioChar.getDescriptor(CCCD_UUID)
+                if (desc == null) {
+                    android.util.Log.e("HelixMic", "Audio CCCD descriptor NOT FOUND!")
+                } else {
                     desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(desc)
+                    val result = gatt.writeDescriptor(desc)
+                    android.util.Log.d("HelixMic", "writeDescriptor(audio) result=$result")
                 }
             }
 
@@ -174,6 +188,7 @@ class HelixMicBleManager(private val context: Context) {
             descriptor: BluetoothGattDescriptor,
             status: Int
         ) {
+            android.util.Log.d("HelixMic", "onDescriptorWrite uuid=${descriptor.characteristic.uuid} status=$status")
             nextGattOp()
         }
 
