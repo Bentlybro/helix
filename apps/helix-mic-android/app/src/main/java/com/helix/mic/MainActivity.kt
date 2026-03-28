@@ -367,8 +367,7 @@ fun TranscriptArea(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f, fill = false)
-                .heightIn(min = 200.dp),
+                .height(200.dp),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF111111))
         ) {
