@@ -72,16 +72,11 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
 }
 
 uint8_t readBatteryPercent() {
-  // Enable the battery read circuit (pull VBAT_ENABLE low)
-  pinMode(VBAT_ENABLE_PIN, OUTPUT);
-  digitalWrite(VBAT_ENABLE_PIN, LOW);
-  delay(10); // Let ADC settle
-
-  // 12-bit ADC, internal 3.6V reference
+  // XIAO nRF52840 battery read — Seeed documented method
+  // PIN_VBAT (P0_31) via 1/2 voltage divider, 3.6V internal ref
   analogReadResolution(12);
-  analogReference(AR_INTERNAL_3_0); // Use 3.0V reference for better accuracy
 
-  // Oversample — average 8 reads for stability
+  // Oversample for stability
   int raw = 0;
   for (int i = 0; i < 8; i++) {
     raw += analogRead(PIN_VBAT);
@@ -89,17 +84,13 @@ uint8_t readBatteryPercent() {
   }
   raw /= 8;
 
-  // Disable to save power
-  digitalWrite(VBAT_ENABLE_PIN, HIGH);
-
-  // Voltage divider on XIAO is 1/2
-  // voltage = raw * (3.0 / 4096) * 2
-  float voltage = raw * (3.0f / 4096.0f) * 2.0f;
+  // 3.6V internal reference, 12-bit, divider x2
+  float voltage = (float)raw * 3.6f * 2.0f / 4096.0f;
 
   Serial.print("BAT raw:"); Serial.print(raw);
   Serial.print(" voltage:"); Serial.println(voltage, 3);
 
-  // Map 3.2V (0%) to 4.2V (100%) — 3.0V is really empty
+  // LiPo: 3.2V = 0%, 4.2V = 100%
   float percent = (voltage - 3.2f) / (4.2f - 3.2f) * 100.0f;
   percent = constrain(percent, 0.0f, 100.0f);
 
