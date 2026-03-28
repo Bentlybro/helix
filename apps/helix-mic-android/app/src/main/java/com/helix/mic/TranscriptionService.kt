@@ -1,197 +1,234 @@
 package com.helix.mic
 
+import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import okhttp3.*
+import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.sqrt
+import java.util.concurrent.TimeUnit
 
 data class TranscriptSegment(
     val text: String,
     val timestamp: Long,
-    val durationMs: Long
+    val durationMs: Long = 0L
 )
 
-class TranscriptionService(private val whisperClient: WhisperClient) {
+class TranscriptionService(private val apiKey: String) {
 
     companion object {
         private const val TAG = "TranscriptionService"
-        private const val SAMPLE_RATE = 16000
-        private const val BYTES_PER_SAMPLE = 2
-        private const val BYTES_PER_SECOND = SAMPLE_RATE * BYTES_PER_SAMPLE // 32000
-
-        // 5 seconds of speech audio before sending to Whisper
-        private const val CHUNK_DURATION_BYTES = BYTES_PER_SECOND * 5 // 160000
-
-        // 0.5s overlap to avoid cutting words at chunk boundaries
-        private const val OVERLAP_BYTES = BYTES_PER_SECOND / 2 // 16000
-
-        // VAD: 100ms frames
-        private const val VAD_FRAME_BYTES = BYTES_PER_SECOND / 10 // 3200
-
-        // Default RMS threshold for voice activity
-        const val DEFAULT_VAD_THRESHOLD = 500
+        private const val WS_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
+        private const val RECONNECT_DELAY_MS = 2000L
+        private const val MAX_RECONNECT_ATTEMPTS = 5
     }
 
+    // Completed segments
     private val _segments = MutableStateFlow<List<TranscriptSegment>>(emptyList())
     val segments: StateFlow<List<TranscriptSegment>> = _segments.asStateFlow()
 
-    private val _isProcessing = MutableStateFlow(false)
-    val isProcessing: StateFlow<Boolean> = _isProcessing.asStateFlow()
+    // Current partial text from deltas
+    private val _partialText = MutableStateFlow("")
+    val partialText: StateFlow<String> = _partialText.asStateFlow()
+
+    private val _isConnected = MutableStateFlow(false)
+    val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    var vadThreshold: Int = DEFAULT_VAD_THRESHOLD
-
-    // Accumulator for speech audio
-    private val speechBuffer = mutableListOf<Byte>()
-    private var overlapBytes = ByteArray(0)
-    private var chunkStartTime = System.currentTimeMillis()
-
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var webSocket: WebSocket? = null
     private var active = false
+    private var reconnectAttempts = 0
+    private var sessionConfigured = false
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MINUTES) // keep alive
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .pingInterval(30, TimeUnit.SECONDS)
+        .build()
 
     fun start() {
         active = true
-        speechBuffer.clear()
-        overlapBytes = ByteArray(0)
-        chunkStartTime = System.currentTimeMillis()
+        reconnectAttempts = 0
+        sessionConfigured = false
         _segments.value = emptyList()
+        _partialText.value = ""
         _error.value = null
+        connectWebSocket()
         Log.d(TAG, "TranscriptionService started")
     }
 
     fun stop() {
         active = false
-        // Flush remaining speech buffer
-        if (speechBuffer.size > BYTES_PER_SECOND / 2) { // at least 0.5s
-            flushChunk()
-        }
+        webSocket?.close(1000, "Recording stopped")
+        webSocket = null
+        sessionConfigured = false
+        _isConnected.value = false
         Log.d(TAG, "TranscriptionService stopped")
     }
 
     fun clear() {
-        speechBuffer.clear()
-        overlapBytes = ByteArray(0)
         _segments.value = emptyList()
+        _partialText.value = ""
         _error.value = null
     }
 
     /**
-     * Feed raw PCM audio data from BLE.
-     * Called from BLE callback — must be fast. Actual processing is async.
+     * Feed raw PCM audio from BLE (16kHz 16-bit mono).
+     * Resamples to 24kHz and sends over WebSocket.
      */
     fun feedAudio(pcmData: ByteArray) {
+        if (!active || !sessionConfigured) return
+
+        scope.launch {
+            try {
+                val resampled = resample16to24(pcmData)
+                val b64 = Base64.encodeToString(resampled, Base64.NO_WRAP)
+                val msg = JSONObject().apply {
+                    put("type", "input_audio_buffer.append")
+                    put("audio", b64)
+                }
+                webSocket?.send(msg.toString())
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending audio", e)
+            }
+        }
+    }
+
+    private fun connectWebSocket() {
         if (!active) return
 
-        // Run VAD + accumulation off the BLE thread
-        scope.launch {
-            processAudioFrame(pcmData)
-        }
+        val request = Request.Builder()
+            .url(WS_URL)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("OpenAI-Beta", "realtime=v1")
+            .build()
+
+        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.d(TAG, "WebSocket connected")
+                _isConnected.value = true
+                _error.value = null
+                reconnectAttempts = 0
+                sendSessionConfig(webSocket)
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                handleMessage(text)
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                Log.d(TAG, "WebSocket closing: $code $reason")
+                webSocket.close(1000, null)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.d(TAG, "WebSocket closed: $code $reason")
+                _isConnected.value = false
+                sessionConfigured = false
+                maybeReconnect()
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e(TAG, "WebSocket failure: ${t.message}", t)
+                _isConnected.value = false
+                sessionConfigured = false
+                _error.value = "Connection failed: ${t.message}"
+                maybeReconnect()
+            }
+        })
     }
 
-    private suspend fun processAudioFrame(pcmData: ByteArray) {
-        // Check VAD on this frame (or split into 100ms sub-frames if larger)
-        val hasSpeech = containsSpeech(pcmData)
-
-        if (hasSpeech) {
-            synchronized(speechBuffer) {
-                // If this is the first speech after silence, prepend overlap from previous chunk
-                if (speechBuffer.isEmpty() && overlapBytes.isNotEmpty()) {
-                    for (b in overlapBytes) speechBuffer.add(b)
-                }
-                for (b in pcmData) speechBuffer.add(b)
-
-                // Check if we have enough speech (5 seconds)
-                if (speechBuffer.size >= CHUNK_DURATION_BYTES) {
-                    flushChunk()
-                }
-            }
+    private fun sendSessionConfig(ws: WebSocket) {
+        val config = JSONObject().apply {
+            put("type", "transcription_session.update")
+            put("session", JSONObject().apply {
+                put("input_audio_format", "pcm16")
+                put("input_audio_transcription", JSONObject().apply {
+                    put("model", "gpt-4o-mini-transcribe")
+                    put("language", "en")
+                })
+                put("turn_detection", JSONObject().apply {
+                    put("type", "server_vad")
+                    put("threshold", 0.5)
+                    put("prefix_padding_ms", 300)
+                    put("silence_duration_ms", 500)
+                })
+                put("input_audio_noise_reduction", JSONObject().apply {
+                    put("type", "near_field")
+                })
+            })
         }
+        ws.send(config.toString())
+        Log.d(TAG, "Session config sent")
     }
 
-    private fun flushChunk() {
-        val pcmData: ByteArray
-        synchronized(speechBuffer) {
-            pcmData = speechBuffer.toByteArray()
-            // Save last 0.5s as overlap for next chunk
-            overlapBytes = if (pcmData.size > OVERLAP_BYTES) {
-                pcmData.copyOfRange(pcmData.size - OVERLAP_BYTES, pcmData.size)
-            } else {
-                ByteArray(0)
-            }
-            speechBuffer.clear()
-        }
+    private fun handleMessage(text: String) {
+        try {
+            val json = JSONObject(text)
+            val type = json.optString("type", "")
 
-        if (pcmData.isEmpty()) return
+            when (type) {
+                "transcription_session.created", "transcription_session.updated" -> {
+                    sessionConfigured = true
+                    Log.d(TAG, "Session configured: $type")
+                }
 
-        val segmentTimestamp = chunkStartTime
-        val durationMs = (pcmData.size.toLong() * 1000L) / BYTES_PER_SECOND
-        chunkStartTime = System.currentTimeMillis()
-
-        scope.launch {
-            _isProcessing.value = true
-            try {
-                val result = whisperClient.transcribe(pcmData)
-                when (result.state) {
-                    WhisperClient.TranscriptionState.SUCCESS -> {
-                        val text = result.text.trim()
-                        if (text.isNotEmpty()) {
-                            val segment = TranscriptSegment(
-                                text = text,
-                                timestamp = segmentTimestamp,
-                                durationMs = durationMs
-                            )
-                            _segments.value = _segments.value + segment
-                            Log.d(TAG, "Segment: $text")
-                        }
-                        _error.value = null
+                "conversation.item.input_audio_transcription.delta" -> {
+                    val delta = json.optString("delta", "")
+                    if (delta.isNotEmpty()) {
+                        _partialText.value = _partialText.value + delta
                     }
-                    WhisperClient.TranscriptionState.ERROR -> {
-                        Log.e(TAG, "Transcription error: ${result.error}")
-                        _error.value = result.error
-                    }
-                    else -> {}
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Transcription exception", e)
-                _error.value = e.message
-            } finally {
-                _isProcessing.value = false
+
+                "conversation.item.input_audio_transcription.completed" -> {
+                    val transcript = json.optString("transcript", "").trim()
+                    if (transcript.isNotEmpty()) {
+                        val segment = TranscriptSegment(
+                            text = transcript,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        _segments.value = _segments.value + segment
+                        Log.d(TAG, "Completed: $transcript")
+                    }
+                    // Clear partial text for next utterance
+                    _partialText.value = ""
+                }
+
+                "error" -> {
+                    val errorObj = json.optJSONObject("error")
+                    val errorMsg = errorObj?.optString("message", "Unknown error") ?: "Unknown error"
+                    Log.e(TAG, "API error: $errorMsg")
+                    _error.value = errorMsg
+                }
+
+                else -> {
+                    Log.v(TAG, "Event: $type")
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing message", e)
         }
     }
 
-    /**
-     * Voice Activity Detection — calculate RMS of PCM samples.
-     * Returns true if any 100ms frame exceeds the threshold.
-     */
-    private fun containsSpeech(pcmData: ByteArray): Boolean {
-        if (pcmData.size < 2) return false
-
-        val buffer = ByteBuffer.wrap(pcmData).order(ByteOrder.LITTLE_ENDIAN)
-        val numSamples = pcmData.size / BYTES_PER_SAMPLE
-        val samplesPerFrame = VAD_FRAME_BYTES / BYTES_PER_SAMPLE // 1600 samples per 100ms
-
-        var sampleIndex = 0
-        while (sampleIndex < numSamples) {
-            var sumSquares = 0.0
-            val frameEnd = minOf(sampleIndex + samplesPerFrame, numSamples)
-            val frameSamples = frameEnd - sampleIndex
-
-            for (i in sampleIndex until frameEnd) {
-                val sample = buffer.getShort(i * BYTES_PER_SAMPLE).toDouble()
-                sumSquares += sample * sample
-            }
-
-            val rms = sqrt(sumSquares / frameSamples)
-            if (rms > vadThreshold) return true
-
-            sampleIndex = frameEnd
+    private fun maybeReconnect() {
+        if (!active) return
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            _error.value = "Connection lost after $MAX_RECONNECT_ATTEMPTS attempts"
+            return
         }
-        return false
+        reconnectAttempts++
+        Log.d(TAG, "Reconnecting (attempt $reconnectAttempts)...")
+        scope.launch {
+            delay(RECONNECT_DELAY_MS * reconnectAttempts)
+            if (active) connectWebSocket()
+        }
     }
 
     fun getFullTranscriptText(): String {
@@ -200,6 +237,47 @@ class TranscriptionService(private val whisperClient: WhisperClient) {
 
     fun destroy() {
         active = false
+        webSocket?.close(1000, "Destroyed")
+        webSocket = null
         scope.cancel()
     }
+}
+
+/**
+ * Resample 16kHz 16-bit LE mono PCM to 24kHz.
+ * For every 2 input samples, produce 3 output samples via linear interpolation.
+ */
+fun resample16to24(input: ByteArray): ByteArray {
+    if (input.size < 4) return input // need at least 2 samples
+
+    val inBuf = ByteBuffer.wrap(input).order(ByteOrder.LITTLE_ENDIAN)
+    val inCount = input.size / 2
+    val inSamples = ShortArray(inCount)
+    inBuf.asShortBuffer().get(inSamples)
+
+    // Output: ratio 3:2
+    val outCount = (inCount.toLong() * 3 / 2).toInt()
+    val outSamples = ShortArray(outCount)
+
+    var outIdx = 0
+    var inIdx = 0
+    while (inIdx < inCount - 1 && outIdx < outCount) {
+        val s0 = inSamples[inIdx].toInt()
+        val s1 = inSamples[inIdx + 1].toInt()
+
+        // Output 3 samples for every 2 input samples
+        outSamples[outIdx++] = s0.toShort()
+        if (outIdx < outCount) outSamples[outIdx++] = ((s0 * 2 + s1) / 3).toShort()
+        if (outIdx < outCount) outSamples[outIdx++] = ((s0 + s1 * 2) / 3).toShort()
+
+        inIdx += 2
+    }
+    // Handle odd last sample
+    if (inIdx < inCount && outIdx < outCount) {
+        outSamples[outIdx++] = inSamples[inIdx].toShort()
+    }
+
+    val result = ByteArray(outIdx * 2)
+    ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(outSamples, 0, outIdx)
+    return result
 }

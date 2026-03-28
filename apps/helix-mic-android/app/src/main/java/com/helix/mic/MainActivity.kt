@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -61,6 +63,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+enum class Screen { MAIN, SETTINGS, SESSIONS, SESSION_DETAIL }
+
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun HelixMicApp(
@@ -73,7 +77,7 @@ fun HelixMicApp(
     val isReceivingAudio by bleManager.isReceivingAudio.collectAsState()
     val packetCount by bleManager.packetCount.collectAsState()
 
-    var showSettings by remember { mutableStateOf(false) }
+    var currentScreen by remember { mutableStateOf(Screen.MAIN) }
     var apiKey by remember { mutableStateOf(sharedPrefs.getString("openai_api_key", "") ?: "") }
 
     // Session state
@@ -82,14 +86,17 @@ fun HelixMicApp(
     var sessionStartTime by remember { mutableStateOf(0L) }
     var summary by remember { mutableStateOf<String?>(null) }
     var isSummarizing by remember { mutableStateOf(false) }
+    var sessionSaved by remember { mutableStateOf(false) }
+    var selectedSession by remember { mutableStateOf<Session?>(null) }
 
-    // TranscriptionService
+    // TranscriptionService — now uses Realtime WebSocket
     val transcriptionService = remember(apiKey) {
-        if (apiKey.isNotBlank()) TranscriptionService(WhisperClient(apiKey)) else null
+        if (apiKey.isNotBlank()) TranscriptionService(apiKey) else null
     }
 
     val segments by (transcriptionService?.segments ?: MutableStateFlow(emptyList())).collectAsState()
-    val isProcessing by (transcriptionService?.isProcessing ?: MutableStateFlow(false)).collectAsState()
+    val partialText by (transcriptionService?.partialText ?: MutableStateFlow("")).collectAsState()
+    val isConnected by (transcriptionService?.isConnected ?: MutableStateFlow(false)).collectAsState()
     val transcriptionError by (transcriptionService?.error ?: MutableStateFlow<String?>(null)).collectAsState()
 
     val scope = rememberCoroutineScope()
@@ -146,186 +153,235 @@ fun HelixMicApp(
         )
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            if (showSettings) {
-                SettingsScreen(
-                    apiKey = apiKey,
-                    onApiKeyChange = { newKey ->
-                        apiKey = newKey
-                        sharedPrefs.edit().putString("openai_api_key", newKey).apply()
-                    },
-                    onBack = { showSettings = false }
-                )
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                ) {
-                    // ── Top Bar ──
-                    TopStatusBar(
-                        connectionState = connectionState,
-                        batteryPercent = batteryPercent,
-                        isRecording = isRecording,
-                        elapsedSeconds = elapsedSeconds,
-                        onSettingsClick = { showSettings = true }
+            when (currentScreen) {
+                Screen.SETTINGS -> {
+                    SettingsScreen(
+                        apiKey = apiKey,
+                        onApiKeyChange = { newKey ->
+                            apiKey = newKey
+                            sharedPrefs.edit().putString("openai_api_key", newKey).apply()
+                        },
+                        onBack = { currentScreen = Screen.MAIN }
                     )
-
-                    // ── Connection button (when disconnected) ──
-                    if (connectionState != ConnectionState.CONNECTED) {
-                        Spacer(modifier = Modifier.weight(1f))
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = when (connectionState) {
-                                    ConnectionState.DISCONNECTED -> "No device connected"
-                                    ConnectionState.SCANNING -> "Scanning for Helix Mic..."
-                                    ConnectionState.CONNECTING -> "Connecting..."
-                                    else -> ""
-                                },
-                                fontSize = 16.sp,
-                                color = Color.Gray
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            if (!blePermissions.allPermissionsGranted) {
-                                Button(
-                                    onClick = { blePermissions.launchMultiplePermissionRequest() },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFFFF4444)
-                                    )
-                                ) { Text("Grant Bluetooth Permissions", color = Color.White) }
-                            } else {
-                                Button(
-                                    onClick = {
-                                        if (connectionState == ConnectionState.DISCONNECTED) {
-                                            bleManager.startScan()
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = connectionState == ConnectionState.DISCONNECTED,
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFFFF4444)
-                                    )
-                                ) {
-                                    Text(
-                                        when (connectionState) {
-                                            ConnectionState.SCANNING -> "Scanning..."
-                                            ConnectionState.CONNECTING -> "Connecting..."
-                                            else -> "Connect to Helix Mic"
-                                        },
-                                        color = Color.White
-                                    )
-                                }
-                            }
+                }
+                Screen.SESSIONS -> {
+                    SessionsListScreen(
+                        sessionManager = sessionManager,
+                        onBack = { currentScreen = Screen.MAIN },
+                        onSessionClick = { session ->
+                            selectedSession = session
+                            currentScreen = Screen.SESSION_DETAIL
                         }
-                        Spacer(modifier = Modifier.weight(1f))
-                    } else {
-                        // ── Connected: Main content ──
-
-                        // Live transcript area
-                        LiveTranscriptView(
-                            segments = segments,
-                            isProcessing = isProcessing,
-                            error = transcriptionError,
+                    )
+                }
+                Screen.SESSION_DETAIL -> {
+                    selectedSession?.let { session ->
+                        SessionDetailScreen(
+                            session = session,
+                            onBack = { currentScreen = Screen.SESSIONS }
+                        )
+                    } ?: run { currentScreen = Screen.SESSIONS }
+                }
+                Screen.MAIN -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                    ) {
+                        // ── Top Bar ──
+                        TopStatusBar(
+                            connectionState = connectionState,
+                            batteryPercent = batteryPercent,
                             isRecording = isRecording,
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                            elapsedSeconds = elapsedSeconds,
+                            isWsConnected = isConnected,
+                            onSettingsClick = { currentScreen = Screen.SETTINGS },
+                            onSessionsClick = { currentScreen = Screen.SESSIONS }
                         )
 
-                        // Summary card (shown after stopping)
-                        if (!isRecording && summary != null) {
-                            SummaryCard(
-                                summary = summary!!,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                        }
-
-                        if (isSummarizing) {
-                            Row(
+                        // ── Connection button (when disconnected) ──
+                        if (connectionState != ConnectionState.CONNECTED) {
+                            Spacer(modifier = Modifier.weight(1f))
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(8.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(horizontal = 16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    color = Color(0xFFFF4444),
-                                    strokeWidth = 2.dp
+                                Text(
+                                    text = when (connectionState) {
+                                        ConnectionState.DISCONNECTED -> "No device connected"
+                                        ConnectionState.SCANNING -> "Scanning for Helix Mic..."
+                                        ConnectionState.CONNECTING -> "Connecting..."
+                                        else -> ""
+                                    },
+                                    fontSize = 16.sp,
+                                    color = Color.Gray
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Generating summary...", fontSize = 13.sp, color = Color.Gray)
-                            }
-                        }
-
-                        // ── Bottom Bar ──
-                        BottomControlBar(
-                            isRecording = isRecording,
-                            canRecord = apiKey.isNotBlank(),
-                            pulseScale = pulseScale,
-                            packetCount = packetCount,
-                            onRecord = {
-                                if (apiKey.isBlank()) {
-                                    Toast.makeText(context, "Set API key in settings first", Toast.LENGTH_SHORT).show()
-                                    return@BottomControlBar
-                                }
-                                if (!isRecording) {
-                                    // Start recording
-                                    summary = null
-                                    transcriptionService?.start()
-                                    bleManager.resetPacketCount()
-                                    currentSessionId = sessionManager.startSession()
-                                    sessionStartTime = System.currentTimeMillis()
-                                    isRecording = true
+                                Spacer(modifier = Modifier.height(16.dp))
+                                if (!blePermissions.allPermissionsGranted) {
+                                    Button(
+                                        onClick = { blePermissions.launchMultiplePermissionRequest() },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFFFF4444)
+                                        )
+                                    ) { Text("Grant Bluetooth Permissions", color = Color.White) }
                                 } else {
-                                    // Stop recording
-                                    isRecording = false
-                                    transcriptionService?.stop()
-                                    val finalSegments = segments.toList()
-                                    val sessionId = currentSessionId
-
-                                    if (sessionId != null) {
-                                        sessionManager.stopSession(sessionId, finalSegments)
+                                    Button(
+                                        onClick = {
+                                            if (connectionState == ConnectionState.DISCONNECTED) {
+                                                bleManager.startScan()
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = connectionState == ConnectionState.DISCONNECTED,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFFFF4444)
+                                        )
+                                    ) {
+                                        Text(
+                                            when (connectionState) {
+                                                ConnectionState.SCANNING -> "Scanning..."
+                                                ConnectionState.CONNECTING -> "Connecting..."
+                                                else -> "Connect to Helix Mic"
+                                            },
+                                            color = Color.White
+                                        )
                                     }
+                                }
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
+                        } else {
+                            // ── Connected: Main content ──
 
-                                    // Generate summary
-                                    val fullText = finalSegments.joinToString(" ") { it.text }
-                                    if (fullText.isNotBlank()) {
-                                        isSummarizing = true
-                                        scope.launch(Dispatchers.IO) {
-                                            val client = SummaryClient(apiKey)
-                                            val result = client.summarize(fullText)
-                                            kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                                isSummarizing = false
-                                                if (result.success) {
-                                                    summary = result.summary
-                                                    if (sessionId != null) {
-                                                        sessionManager.updateSessionSummary(sessionId, result.summary!!)
+                            // Live transcript area
+                            LiveTranscriptView(
+                                segments = segments,
+                                partialText = partialText,
+                                error = transcriptionError,
+                                isRecording = isRecording,
+                                isConnected = isConnected,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+
+                            // Summary card (shown after stopping)
+                            if (!isRecording && summary != null) {
+                                SummaryCard(
+                                    summary = summary!!,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                )
+                            }
+
+                            if (isSummarizing) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = Color(0xFFFF4444),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Generating summary...", fontSize = 13.sp, color = Color.Gray)
+                                }
+                            }
+
+                            // Save button (after session ends with transcript)
+                            if (!isRecording && segments.isNotEmpty() && !sessionSaved) {
+                                Button(
+                                    onClick = {
+                                        val sessionId = currentSessionId
+                                        if (sessionId != null) {
+                                            sessionManager.stopSession(sessionId, segments.toList(), summary)
+                                            sessionSaved = true
+                                            Toast.makeText(context, "Session saved", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF2A2A2A)
+                                    ),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("💾 Save Session", color = Color.White, fontSize = 14.sp)
+                                }
+                            }
+
+                            if (!isRecording && sessionSaved) {
+                                Text(
+                                    "✓ Session saved",
+                                    fontSize = 13.sp,
+                                    color = Color(0xFF00FF88),
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                                )
+                            }
+
+                            // ── Bottom Bar ──
+                            BottomControlBar(
+                                isRecording = isRecording,
+                                canRecord = apiKey.isNotBlank(),
+                                pulseScale = pulseScale,
+                                packetCount = packetCount,
+                                onRecord = {
+                                    if (apiKey.isBlank()) {
+                                        Toast.makeText(context, "Set API key in settings first", Toast.LENGTH_SHORT).show()
+                                        return@BottomControlBar
+                                    }
+                                    if (!isRecording) {
+                                        // Start recording
+                                        summary = null
+                                        sessionSaved = false
+                                        transcriptionService?.start()
+                                        bleManager.resetPacketCount()
+                                        currentSessionId = sessionManager.startSession()
+                                        sessionStartTime = System.currentTimeMillis()
+                                        isRecording = true
+                                    } else {
+                                        // Stop recording
+                                        isRecording = false
+                                        transcriptionService?.stop()
+                                        val finalSegments = segments.toList()
+
+                                        // Generate summary
+                                        val fullText = finalSegments.joinToString(" ") { it.text }
+                                        if (fullText.isNotBlank()) {
+                                            isSummarizing = true
+                                            scope.launch(Dispatchers.IO) {
+                                                val client = SummaryClient(apiKey)
+                                                val result = client.summarize(fullText)
+                                                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                                    isSummarizing = false
+                                                    if (result.success) {
+                                                        summary = result.summary
+                                                    } else {
+                                                        Toast.makeText(context, "Summary failed: ${result.error}", Toast.LENGTH_SHORT).show()
                                                     }
-                                                } else {
-                                                    Toast.makeText(context, "Summary failed: ${result.error}", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }
                                     }
+                                },
+                                onDisconnect = {
+                                    if (isRecording) {
+                                        isRecording = false
+                                        transcriptionService?.stop()
+                                    }
+                                    bleManager.disconnect()
                                 }
-                            },
-                            onDisconnect = {
-                                if (isRecording) {
-                                    isRecording = false
-                                    transcriptionService?.stop()
-                                }
-                                bleManager.disconnect()
-                            }
-                        )
-                    }
+                            )
+                        }
 
-                    Spacer(modifier = Modifier.navigationBarsPadding())
+                        Spacer(modifier = Modifier.navigationBarsPadding())
+                    }
                 }
             }
         }
@@ -340,7 +396,9 @@ fun TopStatusBar(
     batteryPercent: Int?,
     isRecording: Boolean,
     elapsedSeconds: Long,
-    onSettingsClick: () -> Unit
+    isWsConnected: Boolean,
+    onSettingsClick: () -> Unit,
+    onSessionsClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -358,7 +416,7 @@ fun TopStatusBar(
                     ConnectionState.DISCONNECTED -> "Disconnected"
                     ConnectionState.SCANNING -> "Scanning..."
                     ConnectionState.CONNECTING -> "Connecting..."
-                    ConnectionState.CONNECTED -> "Connected"
+                    ConnectionState.CONNECTED -> if (isWsConnected) "Live" else "Connected"
                 },
                 fontSize = 13.sp,
                 color = Color.Gray
@@ -369,7 +427,7 @@ fun TopStatusBar(
             }
         }
 
-        // Right: timer + settings
+        // Right: timer + sessions + settings
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (isRecording) {
                 Text(
@@ -379,6 +437,9 @@ fun TopStatusBar(
                     color = Color(0xFFFF4444)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
+            }
+            IconButton(onClick = onSessionsClick) {
+                Text("📋", fontSize = 18.sp)
             }
             IconButton(onClick = onSettingsClick) {
                 Text("⚙", fontSize = 20.sp, color = Color.Gray)
@@ -392,17 +453,19 @@ fun TopStatusBar(
 @Composable
 fun LiveTranscriptView(
     segments: List<TranscriptSegment>,
-    isProcessing: Boolean,
+    partialText: String,
     error: String?,
     isRecording: Boolean,
+    isConnected: Boolean,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
+    val itemCount = segments.size + (if (partialText.isNotEmpty()) 1 else 0)
 
-    // Auto-scroll to bottom when new segments arrive
-    LaunchedEffect(segments.size) {
-        if (segments.isNotEmpty()) {
-            listState.animateScrollToItem(segments.size - 1)
+    // Auto-scroll to bottom
+    LaunchedEffect(itemCount) {
+        if (itemCount > 0) {
+            listState.animateScrollToItem(itemCount - 1)
         }
     }
 
@@ -412,18 +475,20 @@ fun LiveTranscriptView(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF111111))
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            if (segments.isEmpty() && error == null) {
+            if (segments.isEmpty() && partialText.isEmpty() && error == null) {
                 // Empty state
                 Column(
                     modifier = Modifier.align(Alignment.Center),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = if (isRecording) "Listening..." else "Tap record to start",
+                        text = if (isRecording) {
+                            if (isConnected) "Listening..." else "Connecting to OpenAI..."
+                        } else "Tap record to start",
                         fontSize = 16.sp,
                         color = Color(0xFF444444)
                     )
-                    if (isRecording && isProcessing) {
+                    if (isRecording && !isConnected) {
                         Spacer(modifier = Modifier.height(8.dp))
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
@@ -444,6 +509,19 @@ fun LiveTranscriptView(
                         TranscriptSegmentCard(segment)
                     }
 
+                    // Partial text (current utterance in progress)
+                    if (partialText.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = partialText,
+                                fontSize = 15.sp,
+                                fontStyle = FontStyle.Italic,
+                                color = Color(0xFF888888),
+                                lineHeight = 22.sp
+                            )
+                        }
+                    }
+
                     if (error != null) {
                         item {
                             Text(
@@ -452,23 +530,6 @@ fun LiveTranscriptView(
                                 color = Color(0xFFFF6666),
                                 modifier = Modifier.padding(vertical = 4.dp)
                             )
-                        }
-                    }
-
-                    if (isProcessing) {
-                        item {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    color = Color(0xFFFF4444),
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Transcribing...", fontSize = 12.sp, color = Color.Gray)
-                            }
                         }
                     }
                 }
@@ -508,7 +569,7 @@ fun SummaryCard(summary: String, modifier: Modifier = Modifier) {
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "Meeting Summary",
+                "Summary",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFFFF4444)
@@ -520,6 +581,181 @@ fun SummaryCard(summary: String, modifier: Modifier = Modifier) {
                 color = Color(0xFFCCCCCC),
                 lineHeight = 20.sp
             )
+        }
+    }
+}
+
+// ── Sessions List Screen ──
+
+@Composable
+fun SessionsListScreen(
+    sessionManager: SessionManager,
+    onBack: () -> Unit,
+    onSessionClick: (Session) -> Unit
+) {
+    val sessions = remember { sessionManager.loadSessions() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Text("←", fontSize = 24.sp, color = Color.White)
+            }
+            Text(
+                "Sessions",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }
+
+        if (sessions.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No saved sessions", fontSize = 16.sp, color = Color(0xFF444444))
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(sessions) { session ->
+                    SessionListItem(session = session, onClick = { onSessionClick(session) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SessionListItem(session: Session, onClick: () -> Unit) {
+    val dateStr = remember(session.startTime) {
+        SimpleDateFormat("MMM d, yyyy  HH:mm", Locale.getDefault()).format(Date(session.startTime))
+    }
+    val durationStr = remember(session.startTime, session.endTime) {
+        formatDuration((session.endTime - session.startTime) / 1000)
+    }
+    val firstLine = session.transcript.firstOrNull()?.text?.take(80) ?: "No transcript"
+    val summaryPreview = session.summary?.take(100)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(dateStr, fontSize = 13.sp, color = Color(0xFFFF4444), fontWeight = FontWeight.Medium)
+                Text(durationStr, fontSize = 12.sp, color = Color(0xFF666666))
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                firstLine,
+                fontSize = 14.sp,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (summaryPreview != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    summaryPreview + if ((session.summary?.length ?: 0) > 100) "..." else "",
+                    fontSize = 12.sp,
+                    color = Color(0xFF888888),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+// ── Session Detail Screen ──
+
+@Composable
+fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
+    val dateStr = remember(session.startTime) {
+        SimpleDateFormat("MMM d, yyyy  HH:mm", Locale.getDefault()).format(Date(session.startTime))
+    }
+    val durationStr = remember(session.startTime, session.endTime) {
+        formatDuration((session.endTime - session.startTime) / 1000)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Text("←", fontSize = 24.sp, color = Color.White)
+            }
+            Column {
+                Text(dateStr, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Duration: $durationStr", fontSize = 13.sp, color = Color.Gray)
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Summary
+            if (session.summary != null) {
+                item {
+                    SummaryCard(
+                        summary = session.summary,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Transcript header
+            item {
+                Text(
+                    "Transcript",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                )
+            }
+
+            items(session.transcript) { segment ->
+                TranscriptSegmentCard(segment)
+            }
+
+            if (session.transcript.isEmpty()) {
+                item {
+                    Text("No transcript recorded", fontSize = 14.sp, color = Color(0xFF444444))
+                }
+            }
+
+            item { Spacer(modifier = Modifier.height(16.dp)) }
         }
     }
 }
@@ -689,7 +925,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            "Your API key is stored locally and used for both Whisper (speech-to-text) and GPT-4o-mini (meeting summaries).",
+            "Your API key is stored locally and used for real-time transcription and GPT-4o-mini summaries.",
             fontSize = 12.sp,
             color = Color(0xFF666666)
         )
