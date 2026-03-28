@@ -12,6 +12,9 @@
     
     <!-- Internet for Whisper API -->
     <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Microphone for voice enrollment -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 

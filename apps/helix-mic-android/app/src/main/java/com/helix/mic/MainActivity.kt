@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -89,9 +90,19 @@ fun HelixMicApp(
     var sessionSaved by remember { mutableStateOf(false) }
     var selectedSession by remember { mutableStateOf<Session?>(null) }
 
+    val context = LocalContext.current
+
+    // Voice profile manager
+    val voiceProfileManager = remember { VoiceProfileManager(context) }
+    var isVoiceEnrolled by remember { mutableStateOf(voiceProfileManager.isEnrolled) }
+
     // TranscriptionService — now uses Realtime WebSocket
     val transcriptionService = remember(apiKey) {
-        if (apiKey.isNotBlank()) TranscriptionService(apiKey) else null
+        if (apiKey.isNotBlank()) {
+            TranscriptionService(apiKey).also {
+                it.voiceProfileManager = voiceProfileManager
+            }
+        } else null
     }
 
     val segments by (transcriptionService?.segments ?: MutableStateFlow(emptyList())).collectAsState()
@@ -100,7 +111,6 @@ fun HelixMicApp(
     val transcriptionError by (transcriptionService?.error ?: MutableStateFlow<String?>(null)).collectAsState()
 
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
 
     // Collect BLE audio frames and feed to TranscriptionService
     LaunchedEffect(transcriptionService, isRecording) {
@@ -161,6 +171,9 @@ fun HelixMicApp(
                             apiKey = newKey
                             sharedPrefs.edit().putString("openai_api_key", newKey).apply()
                         },
+                        voiceProfileManager = voiceProfileManager,
+                        isVoiceEnrolled = isVoiceEnrolled,
+                        onEnrollmentChanged = { isVoiceEnrolled = it },
                         onBack = { currentScreen = Screen.MAIN }
                     )
                 }
@@ -462,8 +475,8 @@ fun LiveTranscriptView(
     val listState = rememberLazyListState()
     val itemCount = segments.size + (if (partialText.isNotEmpty()) 1 else 0)
 
-    // Auto-scroll to bottom
-    LaunchedEffect(itemCount) {
+    // Auto-scroll to bottom when new segments or partial text changes
+    LaunchedEffect(segments.size, partialText) {
         if (itemCount > 0) {
             listState.animateScrollToItem(itemCount - 1)
         }
@@ -543,12 +556,30 @@ fun TranscriptSegmentCard(segment: TranscriptSegment) {
     val timeStr = remember(segment.timestamp) {
         SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(segment.timestamp))
     }
+    val speakerColor = remember(segment.speaker) {
+        when (segment.speaker) {
+            "You" -> Color(0xFF00CC88)
+            null -> Color(0xFF666666)
+            else -> Color(0xFF6699FF)
+        }
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = timeStr,
-            fontSize = 11.sp,
-            color = Color(0xFF666666)
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = timeStr,
+                fontSize = 11.sp,
+                color = Color(0xFF666666)
+            )
+            if (segment.speaker != null) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = segment.speaker,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = speakerColor
+                )
+            }
+        }
         Text(
             text = segment.text,
             fontSize = 15.sp,
@@ -865,13 +896,26 @@ fun StatusDot(state: ConnectionState) {
         .background(color))
 }
 
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun SettingsScreen(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
+    voiceProfileManager: VoiceProfileManager,
+    isVoiceEnrolled: Boolean,
+    onEnrollmentChanged: (Boolean) -> Unit,
     onBack: () -> Unit
 ) {
     var showKey by remember { mutableStateOf(false) }
+    var isEnrolling by remember { mutableStateOf(false) }
+    var enrollProgress by remember { mutableStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // Audio recording permission
+    val audioPermission = rememberMultiplePermissionsState(
+        permissions = listOf(android.Manifest.permission.RECORD_AUDIO)
+    )
 
     Column(
         modifier = Modifier
@@ -929,7 +973,170 @@ fun SettingsScreen(
             fontSize = 12.sp,
             color = Color(0xFF666666)
         )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // ── Voice Profile Section ──
+        Text("Voice Profile", fontSize = 14.sp, color = Color.Gray)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            "Enroll your voice so the app can label transcript segments as \"You\" vs other speakers.",
+            fontSize = 12.sp,
+            color = Color(0xFF666666)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Status
+        Text(
+            text = if (isVoiceEnrolled) "✓ Voice enrolled" else "Not enrolled",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (isVoiceEnrolled) Color(0xFF00CC88) else Color(0xFF888888)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (isEnrolling) {
+            // Recording progress
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Recording your voice...",
+                    fontSize = 14.sp,
+                    color = Color(0xFFFF4444)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { enrollProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp),
+                    color = Color(0xFFFF4444),
+                    trackColor = Color(0xFF333333),
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Speak naturally for 10 seconds",
+                    fontSize = 12.sp,
+                    color = Color(0xFF888888)
+                )
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        if (!audioPermission.allPermissionsGranted) {
+                            audioPermission.launchMultiplePermissionRequest()
+                            return@Button
+                        }
+                        isEnrolling = true
+                        enrollProgress = 0f
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val pcmData = recordEnrollmentAudio(
+                                    durationMs = 10_000,
+                                    onProgress = { progress ->
+                                        enrollProgress = progress
+                                    }
+                                )
+                                voiceProfileManager.enroll(pcmData)
+                                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    isEnrolling = false
+                                    onEnrollmentChanged(voiceProfileManager.isEnrolled)
+                                    if (voiceProfileManager.isEnrolled) {
+                                        Toast.makeText(context, "Voice enrolled!", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "Enrollment failed — try speaking louder", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    isEnrolling = false
+                                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF4444)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        if (isVoiceEnrolled) "Re-enroll Voice" else "Enroll Voice",
+                        color = Color.White,
+                        fontSize = 14.sp
+                    )
+                }
+
+                if (isVoiceEnrolled) {
+                    OutlinedButton(
+                        onClick = {
+                            voiceProfileManager.clearProfile()
+                            onEnrollmentChanged(false)
+                            Toast.makeText(context, "Voice profile cleared", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFF888888)
+                        )
+                    ) {
+                        Text("Clear Profile", fontSize = 14.sp)
+                    }
+                }
+            }
+        }
     }
+}
+
+/**
+ * Record audio from the device microphone for enrollment.
+ * Returns raw PCM 16kHz 16-bit mono LE.
+ */
+@Suppress("MissingPermission")
+fun recordEnrollmentAudio(
+    durationMs: Long = 10_000,
+    onProgress: (Float) -> Unit = {}
+): ByteArray {
+    val sampleRate = 16000
+    val bufferSize = android.media.AudioRecord.getMinBufferSize(
+        sampleRate,
+        android.media.AudioFormat.CHANNEL_IN_MONO,
+        android.media.AudioFormat.ENCODING_PCM_16BIT
+    )
+    val recorder = android.media.AudioRecord(
+        android.media.MediaRecorder.AudioSource.MIC,
+        sampleRate,
+        android.media.AudioFormat.CHANNEL_IN_MONO,
+        android.media.AudioFormat.ENCODING_PCM_16BIT,
+        bufferSize
+    )
+
+    val output = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(bufferSize)
+    val startTime = System.currentTimeMillis()
+
+    recorder.startRecording()
+    try {
+        while (System.currentTimeMillis() - startTime < durationMs) {
+            val read = recorder.read(buffer, 0, buffer.size)
+            if (read > 0) {
+                output.write(buffer, 0, read)
+            }
+            val elapsed = System.currentTimeMillis() - startTime
+            onProgress((elapsed.toFloat() / durationMs).coerceIn(0f, 1f))
+        }
+    } finally {
+        recorder.stop()
+        recorder.release()
+    }
+
+    return output.toByteArray()
 }
 
 fun formatDuration(totalSeconds: Long): String {

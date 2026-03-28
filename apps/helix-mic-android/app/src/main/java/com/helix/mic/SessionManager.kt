@@ -24,6 +24,7 @@ data class Session(
                     put("text", seg.text)
                     put("timestamp", seg.timestamp)
                     put("durationMs", seg.durationMs)
+                    put("speaker", seg.speaker ?: JSONObject.NULL)
                 })
             }
         })
@@ -37,7 +38,8 @@ data class Session(
                 TranscriptSegment(
                     text = seg.getString("text"),
                     timestamp = seg.getLong("timestamp"),
-                    durationMs = seg.getLong("durationMs")
+                    durationMs = seg.optLong("durationMs", 0L),
+                    speaker = if (seg.has("speaker") && !seg.isNull("speaker")) seg.getString("speaker") else null
                 )
             }
             return Session(

@@ -13,7 +13,8 @@ import java.util.concurrent.TimeUnit
 data class TranscriptSegment(
     val text: String,
     val timestamp: Long,
-    val durationMs: Long = 0L
+    val durationMs: Long = 0L,
+    val speaker: String? = null
 )
 
 class TranscriptionService(private val apiKey: String) {
@@ -45,6 +46,13 @@ class TranscriptionService(private val apiKey: String) {
     private var reconnectAttempts = 0
     private var sessionConfigured = false
 
+    // Voice profile manager for speaker identification
+    var voiceProfileManager: VoiceProfileManager? = null
+
+    // Buffer recent audio for speaker identification per utterance
+    private val audioBuffer = mutableListOf<ByteArray>()
+    private val audioBufferLock = Any()
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MINUTES) // keep alive
@@ -59,6 +67,8 @@ class TranscriptionService(private val apiKey: String) {
         _segments.value = emptyList()
         _partialText.value = ""
         _error.value = null
+        synchronized(audioBufferLock) { audioBuffer.clear() }
+        voiceProfileManager?.resetSessionSpeakers()
         connectWebSocket()
         Log.d(TAG, "TranscriptionService started")
     }
@@ -85,6 +95,15 @@ class TranscriptionService(private val apiKey: String) {
     fun feedAudio(pcmData: ByteArray) {
         if (!active || !sessionConfigured) return
 
+        // Buffer raw PCM for speaker identification
+        synchronized(audioBufferLock) {
+            audioBuffer.add(pcmData.copyOf())
+            // Keep ~10 seconds max at 16kHz 16-bit mono = ~320KB
+            while (audioBuffer.sumOf { it.size } > 320_000) {
+                audioBuffer.removeFirst()
+            }
+        }
+
         scope.launch {
             try {
                 val resampled = resample16to24(pcmData)
@@ -97,6 +116,24 @@ class TranscriptionService(private val apiKey: String) {
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending audio", e)
             }
+        }
+    }
+
+    /**
+     * Get buffered audio and clear the buffer (called when a segment completes).
+     */
+    private fun consumeAudioBuffer(): ByteArray {
+        synchronized(audioBufferLock) {
+            if (audioBuffer.isEmpty()) return ByteArray(0)
+            val totalSize = audioBuffer.sumOf { it.size }
+            val result = ByteArray(totalSize)
+            var offset = 0
+            for (chunk in audioBuffer) {
+                chunk.copyInto(result, offset)
+                offset += chunk.size
+            }
+            audioBuffer.clear()
+            return result
         }
     }
 
@@ -190,12 +227,24 @@ class TranscriptionService(private val apiKey: String) {
                 "conversation.item.input_audio_transcription.completed" -> {
                     val transcript = json.optString("transcript", "").trim()
                     if (transcript.isNotEmpty()) {
+                        // Identify speaker from buffered audio
+                        val speaker = try {
+                            val bufferedAudio = consumeAudioBuffer()
+                            if (bufferedAudio.isNotEmpty()) {
+                                voiceProfileManager?.identifySpeaker(bufferedAudio)
+                            } else null
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Speaker identification failed", e)
+                            null
+                        }
+
                         val segment = TranscriptSegment(
                             text = transcript,
-                            timestamp = System.currentTimeMillis()
+                            timestamp = System.currentTimeMillis(),
+                            speaker = speaker
                         )
                         _segments.value = _segments.value + segment
-                        Log.d(TAG, "Completed: $transcript")
+                        Log.d(TAG, "Completed [${speaker ?: "?"}]: $transcript")
                     }
                     // Clear partial text for next utterance
                     _partialText.value = ""
