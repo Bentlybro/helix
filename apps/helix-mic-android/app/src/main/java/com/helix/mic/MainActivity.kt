@@ -9,28 +9,32 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,6 +45,40 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+
+// ══════════════════════════════════════════════════════════════
+// HELIX MIC — Wireframe / Schematic UI Theme
+// ══════════════════════════════════════════════════════════════
+
+object HelixTheme {
+    // Backgrounds
+    val Background = Color(0xFF0A0A0A)
+    val SurfaceDark = Color(0xFF0D1117)
+    val SurfaceCard = Color(0xFF111827)
+
+    // Borders
+    val BorderDefault = Color(0xFF1E293B)
+    val BorderActive = Color(0xFF2A3441)
+
+    // Accent
+    val Cyan = Color(0xFF00D4AA)
+    val CyanMuted = Color(0xFF4ECDC4)
+
+    // Text
+    val TextPrimary = Color(0xFFE2E8F0)
+    val TextSecondary = Color(0xFF6B7280)
+    val TextMuted = Color(0xFF3B4252)
+
+    // Status
+    val Danger = Color(0xFFFF3B30)
+    val Warning = Color(0xFFFFAA00)
+    val Success = Color(0xFF00D4AA)
+
+    // Shapes
+    val CardShape = RoundedCornerShape(4.dp)
+    val ButtonShape = RoundedCornerShape(4.dp)
+    val InputShape = RoundedCornerShape(4.dp)
+}
 
 class MainActivity : ComponentActivity() {
     private lateinit var bleManager: HelixMicBleManager
@@ -65,6 +103,23 @@ class MainActivity : ComponentActivity() {
 }
 
 enum class Screen { MAIN, SETTINGS, SESSIONS, SESSION_DETAIL, VOICE_ENROLL }
+
+// ── Markdown stripping utility ──
+
+fun stripMarkdown(text: String): String {
+    var result = text
+    // Bold: **text** or __text__
+    result = result.replace(Regex("\\*\\*(.+?)\\*\\*"), "$1")
+    result = result.replace(Regex("__(.+?)__"), "$1")
+    // Italic: *text* or _text_
+    result = result.replace(Regex("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)"), "$1")
+    result = result.replace(Regex("(?<!_)_(?!_)(.+?)(?<!_)_(?!_)"), "$1")
+    // Headers: # text
+    result = result.replace(Regex("^#{1,6}\\s+", RegexOption.MULTILINE), "")
+    // Bullet points: - or *
+    result = result.replace(Regex("^[\\-\\*]\\s+", RegexOption.MULTILINE), "  ")
+    return result.trim()
+}
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -98,7 +153,6 @@ fun HelixMicApp(
     val voiceProfileManager = remember { VoiceProfileManager(context) }
     var isVoiceEnrolled by remember { mutableStateOf(voiceProfileManager.isEnrolled) }
 
-    // Transcription: either OpenAI Realtime or Local Server
     val openAiService = remember(apiKey) {
         if (apiKey.isNotBlank()) {
             TranscriptionService(apiKey).also {
@@ -110,7 +164,6 @@ fun HelixMicApp(
         LocalServerClient(serverUrl)
     }
 
-    // Clean up clients on dispose
     DisposableEffect(Unit) {
         onDispose {
             openAiService?.destroy()
@@ -118,7 +171,6 @@ fun HelixMicApp(
         }
     }
 
-    // Expose the active service's flows
     val segments by (if (useLocalServer) localServerClient.segments else (openAiService?.segments ?: MutableStateFlow(emptyList()))).collectAsState()
     val partialText by (if (useLocalServer) localServerClient.partialText else (openAiService?.partialText ?: MutableStateFlow(""))).collectAsState()
     val isConnected by (if (useLocalServer) localServerClient.isConnected else (openAiService?.isConnected ?: MutableStateFlow(false))).collectAsState()
@@ -126,7 +178,6 @@ fun HelixMicApp(
 
     val scope = rememberCoroutineScope()
 
-    // Collect BLE audio frames and feed to active transcription service
     LaunchedEffect(useLocalServer, openAiService, isRecording) {
         if (isRecording) {
             bleManager.audioFrames.collect { frame ->
@@ -150,9 +201,9 @@ fun HelixMicApp(
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f,
-        targetValue = 1.15f,
+        targetValue = 1.08f,
         animationSpec = infiniteRepeatable(
-            animation = tween(600, easing = FastOutSlowInEasing),
+            animation = tween(800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulseScale"
@@ -171,16 +222,16 @@ fun HelixMicApp(
 
     MaterialTheme(
         colorScheme = darkColorScheme(
-            background = Color(0xFF0D0D0D),
-            surface = Color(0xFF1A1A1A),
-            surfaceVariant = Color(0xFF1E1E1E),
-            primary = Color(0xFFFF4444),
-            onBackground = Color.White,
-            onSurface = Color.White,
-            onSurfaceVariant = Color(0xFFAAAAAA),
+            background = HelixTheme.Background,
+            surface = HelixTheme.SurfaceDark,
+            surfaceVariant = HelixTheme.SurfaceCard,
+            primary = HelixTheme.Cyan,
+            onBackground = HelixTheme.TextPrimary,
+            onSurface = HelixTheme.TextPrimary,
+            onSurfaceVariant = HelixTheme.TextSecondary,
         )
     ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Surface(modifier = Modifier.fillMaxSize(), color = HelixTheme.Background) {
             when (currentScreen) {
                 Screen.SETTINGS -> {
                     SettingsScreen(
@@ -255,61 +306,153 @@ fun HelixMicApp(
                             onSessionsClick = { currentScreen = Screen.SESSIONS }
                         )
 
+                        // Thin divider
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(HelixTheme.BorderDefault)
+                        )
+
                         // ── Connection button (when disconnected) ──
                         if (connectionState != ConnectionState.CONNECTED) {
                             Spacer(modifier = Modifier.weight(1f))
+
+                            // Device status card
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp),
+                                    .padding(horizontal = 24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Text(
-                                    text = when (connectionState) {
-                                        ConnectionState.DISCONNECTED -> "No device connected"
-                                        ConnectionState.SCANNING -> "Scanning for Helix Mic..."
-                                        ConnectionState.CONNECTING -> "Connecting..."
-                                        else -> ""
-                                    },
-                                    fontSize = 16.sp,
-                                    color = Color.Gray
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                if (!blePermissions.allPermissionsGranted) {
-                                    Button(
-                                        onClick = { blePermissions.launchMultiplePermissionRequest() },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFFFF4444)
+                                // Status card with thin border
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(1.dp, HelixTheme.BorderDefault, HelixTheme.CardShape)
+                                        .background(HelixTheme.SurfaceCard, HelixTheme.CardShape)
+                                        .padding(20.dp)
+                                ) {
+                                    Column {
+                                        // Section label
+                                        Text(
+                                            text = "-- DEVICE STATUS",
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = HelixTheme.TextSecondary,
+                                            letterSpacing = 2.sp
                                         )
-                                    ) { Text("Grant Bluetooth Permissions", color = Color.White) }
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            // Diamond status indicator
+                                            StatusDiamond(
+                                                color = when (connectionState) {
+                                                    ConnectionState.DISCONNECTED -> HelixTheme.TextMuted
+                                                    ConnectionState.SCANNING, ConnectionState.CONNECTING -> HelixTheme.Warning
+                                                    ConnectionState.CONNECTED -> HelixTheme.Cyan
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(
+                                                text = when (connectionState) {
+                                                    ConnectionState.DISCONNECTED -> "DISCONNECTED"
+                                                    ConnectionState.SCANNING -> "SCANNING..."
+                                                    ConnectionState.CONNECTING -> "CONNECTING..."
+                                                    ConnectionState.CONNECTED -> "CONNECTED"
+                                                },
+                                                fontSize = 14.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.Medium,
+                                                color = HelixTheme.TextPrimary,
+                                                letterSpacing = 1.sp
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = when (connectionState) {
+                                                ConnectionState.DISCONNECTED -> "No device in range"
+                                                ConnectionState.SCANNING -> "Searching for Helix Mic..."
+                                                ConnectionState.CONNECTING -> "Establishing link..."
+                                                else -> ""
+                                            },
+                                            fontSize = 13.sp,
+                                            color = HelixTheme.TextSecondary
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(24.dp))
+
+                                if (!blePermissions.allPermissionsGranted) {
+                                    OutlinedButton(
+                                        onClick = { blePermissions.launchMultiplePermissionRequest() },
+                                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                                        shape = HelixTheme.ButtonShape,
+                                        border = BorderStroke(1.dp, HelixTheme.Cyan),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            contentColor = HelixTheme.Cyan
+                                        )
+                                    ) {
+                                        Text(
+                                            "GRANT BLUETOOTH PERMISSIONS",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 12.sp,
+                                            letterSpacing = 1.sp
+                                        )
+                                    }
                                 } else {
-                                    Button(
+                                    OutlinedButton(
                                         onClick = {
                                             if (connectionState == ConnectionState.DISCONNECTED) {
                                                 bleManager.startScan()
                                             }
                                         },
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier.fillMaxWidth().height(48.dp),
                                         enabled = connectionState == ConnectionState.DISCONNECTED,
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFFFF4444)
+                                        shape = HelixTheme.ButtonShape,
+                                        border = BorderStroke(1.dp, 
+                                                if (connectionState == ConnectionState.DISCONNECTED) HelixTheme.Cyan
+                                                else HelixTheme.BorderDefault
+                                            ),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            contentColor = HelixTheme.Cyan,
+                                            disabledContentColor = HelixTheme.TextMuted
                                         )
                                     ) {
                                         Text(
                                             when (connectionState) {
-                                                ConnectionState.SCANNING -> "Scanning..."
-                                                ConnectionState.CONNECTING -> "Connecting..."
-                                                else -> "Connect to Helix Mic"
+                                                ConnectionState.SCANNING -> "SCANNING..."
+                                                ConnectionState.CONNECTING -> "CONNECTING..."
+                                                else -> "CONNECT TO HELIX MIC"
                                             },
-                                            color = Color.White
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 12.sp,
+                                            letterSpacing = 1.sp
                                         )
                                     }
                                 }
                             }
                             Spacer(modifier = Modifier.weight(1f))
                         } else {
-                            // ── Connected: Main content ──
+                            // ── Connected: status bar ──
+                            if (!isRecording) {
+                                ConnectedStatusBar(
+                                    batteryPercent = batteryPercent,
+                                    isWsConnected = isConnected
+                                )
+                            } else {
+                                RecordingStatusBar(
+                                    batteryPercent = batteryPercent,
+                                    elapsedSeconds = elapsedSeconds
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(HelixTheme.BorderDefault)
+                            )
 
                             // Live transcript area
                             LiveTranscriptView(
@@ -320,14 +463,14 @@ fun HelixMicApp(
                                 isConnected = isConnected,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp)
                             )
 
                             // Summary card (shown after stopping)
                             if (!isRecording && summary != null) {
                                 SummaryCard(
                                     summary = summary!!,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                                 )
                             }
 
@@ -340,18 +483,24 @@ fun HelixMicApp(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        color = Color(0xFFFF4444),
-                                        strokeWidth = 2.dp
+                                        modifier = Modifier.size(14.dp),
+                                        color = HelixTheme.Cyan,
+                                        strokeWidth = 1.5.dp
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Generating summary...", fontSize = 13.sp, color = Color.Gray)
+                                    Text(
+                                        "GENERATING SUMMARY...",
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = HelixTheme.TextSecondary,
+                                        letterSpacing = 1.sp
+                                    )
                                 }
                             }
 
                             // Save button (after session ends with transcript)
                             if (!isRecording && segments.isNotEmpty() && !sessionSaved) {
-                                Button(
+                                OutlinedButton(
                                     onClick = {
                                         val sessionId = currentSessionId
                                         if (sessionId != null) {
@@ -362,26 +511,35 @@ fun HelixMicApp(
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFF2A2A2A)
-                                    ),
-                                    shape = RoundedCornerShape(12.dp)
+                                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                                        .height(44.dp),
+                                    shape = HelixTheme.ButtonShape,
+                                    border = BorderStroke(1.dp, HelixTheme.BorderActive),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = HelixTheme.TextPrimary
+                                    )
                                 ) {
-                                    Text("💾 Save Session", color = Color.White, fontSize = 14.sp)
+                                    Text(
+                                        "SAVE SESSION",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 12.sp,
+                                        letterSpacing = 1.sp
+                                    )
                                 }
                             }
 
                             if (!isRecording && sessionSaved) {
                                 Text(
-                                    "✓ Session saved",
-                                    fontSize = 13.sp,
-                                    color = Color(0xFF00FF88),
+                                    "[v] Session saved",
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = HelixTheme.Cyan,
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                                 )
                             }
 
                             // ── Bottom Bar ──
+                            Spacer(modifier = Modifier.height(8.dp))
                             BottomControlBar(
                                 isRecording = isRecording,
                                 canRecord = useLocalServer || apiKey.isNotBlank(),
@@ -393,7 +551,6 @@ fun HelixMicApp(
                                         return@BottomControlBar
                                     }
                                     if (!isRecording) {
-                                        // Start recording
                                         summary = null
                                         sessionSaved = false
                                         if (useLocalServer) {
@@ -406,7 +563,6 @@ fun HelixMicApp(
                                         sessionStartTime = System.currentTimeMillis()
                                         isRecording = true
                                     } else {
-                                        // Stop recording
                                         isRecording = false
                                         if (useLocalServer) {
                                             localServerClient.stop()
@@ -414,8 +570,6 @@ fun HelixMicApp(
                                             openAiService?.stop()
                                         }
                                         val finalSegments = segments.toList()
-
-                                        // Generate summary
                                         val fullText = finalSegments.joinToString(" ") { it.text }
                                         if (fullText.isNotBlank()) {
                                             isSummarizing = true
@@ -456,7 +610,9 @@ fun HelixMicApp(
     }
 }
 
-// ── Top Status Bar ──
+// ══════════════════════════════════════════════════════════════
+// TOP STATUS BAR
+// ══════════════════════════════════════════════════════════════
 
 @Composable
 fun TopStatusBar(
@@ -471,52 +627,167 @@ fun TopStatusBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Left: connection status
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(connectionState)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = when (connectionState) {
-                    ConnectionState.DISCONNECTED -> "Disconnected"
-                    ConnectionState.SCANNING -> "Scanning..."
-                    ConnectionState.CONNECTING -> "Connecting..."
-                    ConnectionState.CONNECTED -> if (isWsConnected) "Live" else "Connected"  // TODO: show "Local" indicator
-                },
-                fontSize = 13.sp,
-                color = Color.Gray
-            )
-            if (batteryPercent != null) {
-                Spacer(modifier = Modifier.width(12.dp))
-                BatteryIndicator(batteryPercent)
-            }
-        }
+        // Left: App title
+        Text(
+            text = "HELIX MIC",
+            fontSize = 16.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = HelixTheme.TextPrimary,
+            letterSpacing = 2.sp
+        )
 
-        // Right: timer + sessions + settings
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Right: nav buttons
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             if (isRecording) {
                 Text(
                     text = formatDuration(elapsedSeconds),
-                    fontSize = 16.sp,
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium,
-                    color = Color(0xFFFF4444)
+                    color = HelixTheme.Danger
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }
-            IconButton(onClick = onSessionsClick) {
-                Text("Sessions", fontSize = 12.sp, color = Color.Gray)
+            TextButton(
+                onClick = onSessionsClick,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    "SESSIONS",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextSecondary,
+                    letterSpacing = 1.sp
+                )
             }
-            IconButton(onClick = onSettingsClick) {
-                Text("Settings", fontSize = 12.sp, color = Color.Gray)
+            TextButton(
+                onClick = onSettingsClick,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    "SETTINGS",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextSecondary,
+                    letterSpacing = 1.sp
+                )
             }
         }
     }
 }
 
-// ── Live Transcript View ──
+// ── Connected status bar ──
+
+@Composable
+fun ConnectedStatusBar(batteryPercent: Int?, isWsConnected: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(HelixTheme.SurfaceCard)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatusDiamond(color = HelixTheme.Cyan)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "CONNECTED",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.Cyan,
+                letterSpacing = 1.sp
+            )
+        }
+        if (batteryPercent != null) {
+            Text(
+                "BAT ${batteryPercent}%",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = when {
+                    batteryPercent > 50 -> HelixTheme.Cyan
+                    batteryPercent > 20 -> HelixTheme.Warning
+                    else -> HelixTheme.Danger
+                }
+            )
+        }
+        if (isWsConnected) {
+            Text(
+                "LIVE",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.Cyan,
+                letterSpacing = 1.sp
+            )
+        }
+    }
+}
+
+// ── Recording status bar ──
+
+@Composable
+fun RecordingStatusBar(batteryPercent: Int?, elapsedSeconds: Long) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(HelixTheme.SurfaceCard)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatusDiamond(color = HelixTheme.Cyan)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "CONNECTED",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.Cyan,
+                letterSpacing = 1.sp
+            )
+        }
+        if (batteryPercent != null) {
+            Text(
+                "BAT ${batteryPercent}%",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = when {
+                    batteryPercent > 50 -> HelixTheme.Cyan
+                    batteryPercent > 20 -> HelixTheme.Warning
+                    else -> HelixTheme.Danger
+                }
+            )
+        }
+        // Recording indicator
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(HelixTheme.Danger, RoundedCornerShape(1.dp))
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                "REC ${formatDuration(elapsedSeconds)}",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.Danger,
+                letterSpacing = 1.sp
+            )
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// LIVE TRANSCRIPT VIEW
+// ══════════════════════════════════════════════════════════════
 
 @Composable
 fun LiveTranscriptView(
@@ -530,75 +801,84 @@ fun LiveTranscriptView(
     val listState = rememberLazyListState()
     val itemCount = segments.size + (if (partialText.isNotEmpty()) 1 else 0)
 
-    // Auto-scroll to bottom when new segments or partial text changes
     LaunchedEffect(segments.size, partialText) {
         if (itemCount > 0) {
             listState.animateScrollToItem(itemCount - 1)
         }
     }
 
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF111111))
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.dp, HelixTheme.BorderDefault, HelixTheme.CardShape)
+            .background(HelixTheme.SurfaceCard, HelixTheme.CardShape)
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            if (segments.isEmpty() && partialText.isEmpty() && error == null) {
-                // Empty state
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = if (isRecording) {
-                            if (isConnected) "Listening..." else "Connecting..."
-                        } else "Tap record to start",
-                        fontSize = 16.sp,
-                        color = Color(0xFF444444)
+        // Section label at top
+        Text(
+            text = "-- TRANSCRIPT",
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            color = HelixTheme.TextSecondary,
+            letterSpacing = 2.sp,
+            modifier = Modifier.padding(start = 12.dp, top = 8.dp)
+        )
+
+        if (segments.isEmpty() && partialText.isEmpty() && error == null) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = if (isRecording) {
+                        if (isConnected) "Listening..." else "Connecting..."
+                    } else "Tap record to begin",
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextMuted
+                )
+                if (isRecording && !isConnected) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = HelixTheme.Cyan,
+                        strokeWidth = 1.5.dp
                     )
-                    if (isRecording && !isConnected) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = Color(0xFFFF4444),
-                            strokeWidth = 2.dp
+                }
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 12.dp, end = 12.dp, top = 24.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(segments) { segment ->
+                    TranscriptSegmentCard(segment)
+                }
+
+                if (partialText.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "> $partialText",
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontStyle = FontStyle.Italic,
+                            color = HelixTheme.CyanMuted,
+                            lineHeight = 20.sp
                         )
                     }
                 }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(segments) { segment ->
-                        TranscriptSegmentCard(segment)
-                    }
 
-                    // Partial text (current utterance in progress)
-                    if (partialText.isNotEmpty()) {
-                        item {
-                            Text(
-                                text = partialText,
-                                fontSize = 15.sp,
-                                fontStyle = FontStyle.Italic,
-                                color = Color(0xFF888888),
-                                lineHeight = 22.sp
-                            )
-                        }
-                    }
-
-                    if (error != null) {
-                        item {
-                            Text(
-                                "⚠ $error",
-                                fontSize = 13.sp,
-                                color = Color(0xFFFF6666),
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
-                        }
+                if (error != null) {
+                    item {
+                        Text(
+                            "[!] $error",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = HelixTheme.Danger,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
                     }
                 }
             }
@@ -613,23 +893,25 @@ fun TranscriptSegmentCard(segment: TranscriptSegment) {
     }
     val speakerColor = remember(segment.speaker) {
         when (segment.speaker) {
-            "You" -> Color(0xFF00CC88)
-            null -> Color(0xFF666666)
+            "You" -> Color(0xFF00D4AA)
+            null -> HelixTheme.TextSecondary
             else -> Color(0xFF6699FF)
         }
     }
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = timeStr,
+                text = "[$timeStr]",
                 fontSize = 11.sp,
-                color = Color(0xFF666666)
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.TextSecondary
             )
             if (segment.speaker != null) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = segment.speaker,
+                    text = "${segment.speaker}:",
                     fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     color = speakerColor
                 )
@@ -637,41 +919,50 @@ fun TranscriptSegmentCard(segment: TranscriptSegment) {
         }
         Text(
             text = segment.text,
-            fontSize = 15.sp,
-            color = Color.White,
-            lineHeight = 22.sp
+            fontSize = 14.sp,
+            color = HelixTheme.TextPrimary,
+            lineHeight = 20.sp,
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp)
         )
     }
 }
 
-// ── Summary Card ──
+// ══════════════════════════════════════════════════════════════
+// SUMMARY CARD
+// ══════════════════════════════════════════════════════════════
 
 @Composable
 fun SummaryCard(summary: String, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1212))
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.dp, HelixTheme.BorderDefault, HelixTheme.CardShape)
+            .background(HelixTheme.SurfaceCard, HelixTheme.CardShape)
+            .padding(16.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column {
             Text(
-                "Summary",
-                fontSize = 16.sp,
+                "-- SUMMARY",
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFFF4444)
+                color = HelixTheme.Cyan,
+                letterSpacing = 2.sp
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = summary,
-                fontSize = 14.sp,
-                color = Color(0xFFCCCCCC),
+                text = stripMarkdown(summary),
+                fontSize = 13.sp,
+                color = HelixTheme.TextPrimary,
                 lineHeight = 20.sp
             )
         }
     }
 }
 
-// ── Sessions List Screen ──
+// ══════════════════════════════════════════════════════════════
+// SESSIONS LIST SCREEN
+// ══════════════════════════════════════════════════════════════
 
 @Composable
 fun SessionsListScreen(
@@ -686,35 +977,59 @@ fun SessionsListScreen(
             .fillMaxSize()
             .statusBarsPadding()
     ) {
+        // Header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Text("←", fontSize = 24.sp, color = Color.White)
+            TextButton(
+                onClick = onBack,
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    "<-",
+                    fontSize = 18.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.Cyan
+                )
             }
+            Spacer(modifier = Modifier.width(12.dp))
             Text(
-                "Sessions",
-                fontSize = 24.sp,
+                "SESSIONS",
+                fontSize = 18.sp,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = HelixTheme.TextPrimary,
+                letterSpacing = 2.sp
             )
         }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(HelixTheme.BorderDefault)
+        )
 
         if (sessions.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text("No saved sessions", fontSize = 16.sp, color = Color(0xFF444444))
+                Text(
+                    "No saved sessions",
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextMuted
+                )
             }
         } else {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(sessions) { session ->
@@ -728,43 +1043,55 @@ fun SessionsListScreen(
 @Composable
 fun SessionListItem(session: Session, onClick: () -> Unit) {
     val dateStr = remember(session.startTime) {
-        SimpleDateFormat("MMM d, yyyy  HH:mm", Locale.getDefault()).format(Date(session.startTime))
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(session.startTime))
     }
     val durationStr = remember(session.startTime, session.endTime) {
-        formatDuration((session.endTime - session.startTime) / 1000)
+        "dur: " + formatDuration((session.endTime - session.startTime) / 1000)
     }
     val firstLine = session.transcript.firstOrNull()?.text?.take(80) ?: "No transcript"
-    val summaryPreview = session.summary?.take(100)
+    val summaryPreview = session.summary?.let { stripMarkdown(it).take(100) }
 
-    Card(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+            .border(1.dp, HelixTheme.BorderDefault, HelixTheme.CardShape)
+            .background(HelixTheme.SurfaceCard, HelixTheme.CardShape)
+            .clickable(onClick = onClick)
+            .padding(14.dp)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(dateStr, fontSize = 13.sp, color = Color(0xFFFF4444), fontWeight = FontWeight.Medium)
-                Text(durationStr, fontSize = 12.sp, color = Color(0xFF666666))
+                Text(
+                    dateStr,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.Cyan,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    durationStr,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextSecondary
+                )
             }
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                firstLine,
-                fontSize = 14.sp,
-                color = Color.White,
+                "\"$firstLine\"",
+                fontSize = 13.sp,
+                color = HelixTheme.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             if (summaryPreview != null) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    summaryPreview + if ((session.summary?.length ?: 0) > 100) "..." else "",
+                    "Summary: $summaryPreview" + if ((session.summary?.length ?: 0) > 100) "..." else "",
                     fontSize = 12.sp,
-                    color = Color(0xFF888888),
+                    color = HelixTheme.TextSecondary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -773,12 +1100,14 @@ fun SessionListItem(session: Session, onClick: () -> Unit) {
     }
 }
 
-// ── Session Detail Screen ──
+// ══════════════════════════════════════════════════════════════
+// SESSION DETAIL SCREEN
+// ══════════════════════════════════════════════════════════════
 
 @Composable
 fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
     val dateStr = remember(session.startTime) {
-        SimpleDateFormat("MMM d, yyyy  HH:mm", Locale.getDefault()).format(Date(session.startTime))
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(session.startTime))
     }
     val durationStr = remember(session.startTime, session.endTime) {
         formatDuration((session.endTime - session.startTime) / 1000)
@@ -789,26 +1118,54 @@ fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
             .fillMaxSize()
             .statusBarsPadding()
     ) {
+        // Header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Text("←", fontSize = 24.sp, color = Color.White)
+            TextButton(
+                onClick = onBack,
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    "<-",
+                    fontSize = 18.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.Cyan
+                )
             }
+            Spacer(modifier = Modifier.width(12.dp))
             Column {
-                Text(dateStr, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text("Duration: $durationStr", fontSize = 13.sp, color = Color.Gray)
+                Text(
+                    dateStr,
+                    fontSize = 16.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = HelixTheme.TextPrimary
+                )
+                Text(
+                    "Duration: $durationStr",
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextSecondary
+                )
             }
         }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(HelixTheme.BorderDefault)
+        )
 
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             // Summary
             if (session.summary != null) {
@@ -823,10 +1180,12 @@ fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
             // Transcript header
             item {
                 Text(
-                    "Transcript",
-                    fontSize = 16.sp,
+                    "-- TRANSCRIPT",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
+                    color = HelixTheme.TextSecondary,
+                    letterSpacing = 2.sp,
                     modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                 )
             }
@@ -837,7 +1196,12 @@ fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
 
             if (session.transcript.isEmpty()) {
                 item {
-                    Text("No transcript recorded", fontSize = 14.sp, color = Color(0xFF444444))
+                    Text(
+                        "No transcript recorded",
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextMuted
+                    )
                 }
             }
 
@@ -846,7 +1210,9 @@ fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
     }
 }
 
-// ── Bottom Control Bar ──
+// ══════════════════════════════════════════════════════════════
+// BOTTOM CONTROL BAR
+// ══════════════════════════════════════════════════════════════
 
 @Composable
 fun BottomControlBar(
@@ -860,96 +1226,134 @@ fun BottomControlBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // Packet count when recording
         if (isRecording) {
             Text(
-                "$packetCount packets",
-                fontSize = 11.sp,
-                color = Color(0xFF555555)
+                "${packetCount} packets",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.TextMuted
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Disconnect button
-            TextButton(onClick = onDisconnect) {
-                Text("Disconnect", fontSize = 13.sp, color = Color(0xFF666666))
-            }
-
-            // Big record/stop button
-            Button(
+        // Record/Stop button
+        if (isRecording) {
+            // STOP button — square, red border
+            OutlinedButton(
                 onClick = onRecord,
                 modifier = Modifier
                     .size(72.dp)
-                    .then(
-                        if (isRecording) Modifier.scale(pulseScale) else Modifier
-                    ),
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isRecording) Color(0xFFCC0000) else Color(0xFFFF4444),
-                    disabledContainerColor = Color(0xFF333333)
+                    .scale(pulseScale),
+                shape = RoundedCornerShape(4.dp),
+                border = BorderStroke(1.dp, HelixTheme.Danger),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = HelixTheme.Danger
                 ),
-                enabled = canRecord,
                 contentPadding = PaddingValues(0.dp)
             ) {
-                if (isRecording) {
-                    // Stop icon (square)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Square stop icon
                     Box(
                         modifier = Modifier
-                            .size(24.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color.White)
+                            .size(20.dp)
+                            .background(HelixTheme.Danger, RoundedCornerShape(2.dp))
                     )
-                } else {
-                    // Record icon (circle)
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "STOP",
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.Danger,
+                        letterSpacing = 1.sp
                     )
                 }
             }
-
-            // Spacer to balance layout
-            TextButton(onClick = {}, enabled = false) {
-                Text("", fontSize = 13.sp)
+        } else {
+            // RECORD button — circle outline, cyan
+            OutlinedButton(
+                onClick = onRecord,
+                modifier = Modifier.size(72.dp),
+                shape = CircleShape,
+                enabled = canRecord,
+                border = BorderStroke(1.dp, 
+                        if (canRecord) HelixTheme.Cyan else HelixTheme.TextMuted
+                    ),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = HelixTheme.Cyan,
+                    disabledContentColor = HelixTheme.TextMuted
+                ),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Circle record icon
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .border(2.dp, if (canRecord) HelixTheme.Cyan else HelixTheme.TextMuted, CircleShape)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "REC",
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.sp
+                    )
+                }
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Disconnect link
+        TextButton(onClick = onDisconnect) {
+            Text(
+                "[disconnect]",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.TextSecondary
+            )
         }
     }
 }
 
-// ── Shared Components ──
+// ══════════════════════════════════════════════════════════════
+// SHARED COMPONENTS
+// ══════════════════════════════════════════════════════════════
+
+@Composable
+fun StatusDiamond(color: Color) {
+    Box(
+        modifier = Modifier
+            .size(10.dp)
+            .rotate(45f)
+            .background(color, RoundedCornerShape(1.dp))
+    )
+}
 
 @Composable
 fun BatteryIndicator(percent: Int) {
     val color = when {
-        percent > 50 -> Color(0xFF00FF88)
-        percent > 20 -> Color(0xFFFFAA00)
-        else -> Color(0xFFFF4444)
+        percent > 50 -> HelixTheme.Cyan
+        percent > 20 -> HelixTheme.Warning
+        else -> HelixTheme.Danger
     }
-    Text("BAT $percent%", fontSize = 12.sp, color = color, fontWeight = FontWeight.Medium)
+    Text(
+        "BAT $percent%",
+        fontSize = 12.sp,
+        fontFamily = FontFamily.Monospace,
+        color = color,
+        fontWeight = FontWeight.Medium
+    )
 }
 
-@Composable
-fun StatusDot(state: ConnectionState) {
-    val color = when (state) {
-        ConnectionState.DISCONNECTED -> Color(0xFF555555)
-        ConnectionState.SCANNING, ConnectionState.CONNECTING -> Color(0xFFFFAA00)
-        ConnectionState.CONNECTED -> Color(0xFF00FF88)
-    }
-    Box(modifier = Modifier
-        .size(10.dp)
-        .clip(CircleShape)
-        .background(color))
-}
+// ══════════════════════════════════════════════════════════════
+// SETTINGS SCREEN
+// ══════════════════════════════════════════════════════════════
 
 @Composable
 fun SettingsScreen(
@@ -972,7 +1376,6 @@ fun SettingsScreen(
     var serverEnrolledName by remember { mutableStateOf<String?>(null) }
     var serverCheckDone by remember { mutableStateOf(false) }
 
-    // Query server for enrolled speakers on load
     LaunchedEffect(serverUrl, useLocalServer) {
         if (useLocalServer) {
             kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -991,218 +1394,309 @@ fun SettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp)
             .statusBarsPadding()
     ) {
-        Spacer(modifier = Modifier.height(12.dp))
-
+        // Header
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Text("\u2190", fontSize = 24.sp, color = Color.White)
-            }
-            Text(
-                "Settings",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text("OpenAI API Key", fontSize = 14.sp, color = Color.Gray)
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = onApiKeyChange,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("sk-...", color = Color(0xFF444444)) },
-            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = {
-                TextButton(onClick = { showKey = !showKey }) {
-                    Text(if (showKey) "Hide" else "Show", fontSize = 12.sp, color = Color.Gray)
-                }
-            },
-            singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFFFF4444),
-                unfocusedBorderColor = Color(0xFF333333),
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White
-            )
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            "Your API key is stored locally and used for real-time transcription and GPT-4o-mini summaries.",
-            fontSize = 12.sp,
-            color = Color(0xFF666666)
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // ── Local Server Section ──
-        Text("Transcription Backend", fontSize = 14.sp, color = Color.Gray)
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "Use Local Server",
-                    fontSize = 15.sp,
-                    color = Color.White
-                )
-                Text(
-                    if (useLocalServer) "Streaming to local Helix STT server" else "Using OpenAI Realtime API",
-                    fontSize = 12.sp,
-                    color = Color(0xFF666666)
-                )
-            }
-            Switch(
-                checked = useLocalServer,
-                onCheckedChange = onUseLocalServerChange,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = Color(0xFFFF4444),
-                    uncheckedThumbColor = Color(0xFF888888),
-                    uncheckedTrackColor = Color(0xFF333333)
-                )
-            )
-        }
-
-        if (useLocalServer) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text("Server URL", fontSize = 13.sp, color = Color.Gray)
-            Spacer(modifier = Modifier.height(4.dp))
-            OutlinedTextField(
-                value = serverUrl,
-                onValueChange = onServerUrlChange,
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("ws://192.168.0.35:8770/ws/stream", color = Color(0xFF444444)) },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFFFF4444),
-                    unfocusedBorderColor = Color(0xFF333333),
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                )
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "Raw PCM audio is sent directly -- no API key needed for local server.",
-                fontSize = 12.sp,
-                color = Color(0xFF666666)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // ── Voice Profile Section ──
-        Text("Voice Profile", fontSize = 14.sp, color = Color.Gray)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            "Enroll your voice so the server can label transcript segments as your name vs other speakers.",
-            fontSize = 12.sp,
-            color = Color(0xFF666666)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Status — prefer server-checked name, fall back to local
-        val displayName = serverEnrolledName ?: voiceProfileManager.enrolledName
-        val effectiveEnrolled = if (serverCheckDone) (serverEnrolledName != null) else isVoiceEnrolled
-
-        if (!serverCheckDone && useLocalServer) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    color = Color(0xFFFF4444),
-                    strokeWidth = 2.dp
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Checking server...", fontSize = 14.sp, color = Color(0xFF888888))
-            }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(if (effectiveEnrolled) Color(0xFF00CC88) else Color(0xFF555555))
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (effectiveEnrolled && displayName != null) "Enrolled as \"$displayName\"" else "Not enrolled",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (effectiveEnrolled) Color(0xFF00CC88) else Color(0xFF888888)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = {
-                    if (!isConnected) {
-                        Toast.makeText(context, "Connect Helix-Mic first", Toast.LENGTH_SHORT).show()
-                        return@Button
-                    }
-                    if (!useLocalServer) {
-                        Toast.makeText(context, "Enable local server to use voice enrollment", Toast.LENGTH_SHORT).show()
-                        return@Button
-                    }
-                    onStartEnrollment()
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFF4444)
-                ),
-                shape = RoundedCornerShape(12.dp)
+            TextButton(
+                onClick = onBack,
+                contentPadding = PaddingValues(0.dp)
             ) {
                 Text(
-                    if (isVoiceEnrolled) "Re-enroll Voice" else "Set Up Voice Profile",
-                    color = Color.White,
-                    fontSize = 14.sp
+                    "<-",
+                    fontSize = 18.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.Cyan
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                "SETTINGS",
+                fontSize = 18.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = HelixTheme.TextPrimary,
+                letterSpacing = 2.sp
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(HelixTheme.BorderDefault)
+        )
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // ── API Key Section ──
+            item {
+                SectionLabel("OPENAI API KEY")
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = onApiKeyChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = {
+                        Text(
+                            "sk-...",
+                            color = HelixTheme.TextMuted,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp
+                        )
+                    },
+                    visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        TextButton(onClick = { showKey = !showKey }) {
+                            Text(
+                                if (showKey) "HIDE" else "SHOW",
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = HelixTheme.TextSecondary,
+                                letterSpacing = 1.sp
+                            )
+                        }
+                    },
+                    singleLine = true,
+                    shape = HelixTheme.InputShape,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = HelixTheme.Cyan,
+                        unfocusedBorderColor = HelixTheme.BorderDefault,
+                        focusedTextColor = HelixTheme.TextPrimary,
+                        unfocusedTextColor = HelixTheme.TextPrimary,
+                        cursorColor = HelixTheme.Cyan
+                    ),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp
+                    )
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Stored locally. Used for real-time transcription and GPT-4o-mini summaries.",
+                    fontSize = 11.sp,
+                    color = HelixTheme.TextSecondary,
+                    lineHeight = 16.sp
                 )
             }
 
-            if (isVoiceEnrolled) {
-                OutlinedButton(
-                    onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            voiceProfileManager.clearProfile(serverUrl)
-                            kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                onEnrollmentChanged(false)
-                                Toast.makeText(context, "Voice profile cleared", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFF888888)
-                    )
+            // ── Transcription Backend Section ──
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionLabel("TRANSCRIPTION BACKEND")
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Clear Profile", fontSize = 14.sp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Use Local Server",
+                            fontSize = 14.sp,
+                            color = HelixTheme.TextPrimary
+                        )
+                        Text(
+                            if (useLocalServer) "Streaming to local Helix STT server" else "Using OpenAI Realtime API",
+                            fontSize = 11.sp,
+                            color = HelixTheme.TextSecondary
+                        )
+                    }
+                    Switch(
+                        checked = useLocalServer,
+                        onCheckedChange = onUseLocalServerChange,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = HelixTheme.Background,
+                            checkedTrackColor = HelixTheme.Cyan,
+                            uncheckedThumbColor = HelixTheme.TextSecondary,
+                            uncheckedTrackColor = HelixTheme.BorderDefault
+                        )
+                    )
+                }
+
+                if (useLocalServer) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        "SERVER URL",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextSecondary,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = serverUrl,
+                        onValueChange = onServerUrlChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = {
+                            Text(
+                                "ws://192.168.0.35:8770/ws/stream",
+                                color = HelixTheme.TextMuted,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp
+                            )
+                        },
+                        singleLine = true,
+                        shape = HelixTheme.InputShape,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = HelixTheme.Cyan,
+                            unfocusedBorderColor = HelixTheme.BorderDefault,
+                            focusedTextColor = HelixTheme.TextPrimary,
+                            unfocusedTextColor = HelixTheme.TextPrimary,
+                            cursorColor = HelixTheme.Cyan
+                        ),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Raw PCM audio sent directly -- no API key needed.",
+                        fontSize = 11.sp,
+                        color = HelixTheme.TextSecondary
+                    )
                 }
             }
+
+            // ── Voice Profile Section ──
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionLabel("VOICE PROFILE")
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Enroll your voice so the server can label transcript segments as your name vs other speakers.",
+                    fontSize = 11.sp,
+                    color = HelixTheme.TextSecondary,
+                    lineHeight = 16.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val displayName = serverEnrolledName ?: voiceProfileManager.enrolledName
+                val effectiveEnrolled = if (serverCheckDone) (serverEnrolledName != null) else isVoiceEnrolled
+
+                if (!serverCheckDone && useLocalServer) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            color = HelixTheme.Cyan,
+                            strokeWidth = 1.5.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Checking server...",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = HelixTheme.TextSecondary
+                        )
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusDiamond(
+                            color = if (effectiveEnrolled) HelixTheme.Cyan else HelixTheme.TextMuted
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (effectiveEnrolled && displayName != null) "Enrolled as \"$displayName\"" else "Not enrolled",
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            color = if (effectiveEnrolled) HelixTheme.Cyan else HelixTheme.TextSecondary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            if (!isConnected) {
+                                Toast.makeText(context, "Connect Helix-Mic first", Toast.LENGTH_SHORT).show()
+                                return@OutlinedButton
+                            }
+                            if (!useLocalServer) {
+                                Toast.makeText(context, "Enable local server to use voice enrollment", Toast.LENGTH_SHORT).show()
+                                return@OutlinedButton
+                            }
+                            onStartEnrollment()
+                        },
+                        shape = HelixTheme.ButtonShape,
+                        border = BorderStroke(1.dp, HelixTheme.Cyan),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = HelixTheme.Cyan
+                        )
+                    ) {
+                        Text(
+                            if (isVoiceEnrolled) "RE-ENROLL" else "SET UP VOICE",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 1.sp
+                        )
+                    }
+
+                    if (isVoiceEnrolled) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch(Dispatchers.IO) {
+                                    voiceProfileManager.clearProfile(serverUrl)
+                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                        onEnrollmentChanged(false)
+                                        Toast.makeText(context, "Voice profile cleared", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            shape = HelixTheme.ButtonShape,
+                            border = BorderStroke(1.dp, HelixTheme.BorderActive),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = HelixTheme.TextSecondary
+                            )
+                        ) {
+                            Text(
+                                "CLEAR",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            item { Spacer(modifier = Modifier.height(32.dp)) }
         }
     }
 }
 
-// ── Voice Enrollment Flow ──
+@Composable
+fun SectionLabel(text: String) {
+    Text(
+        text = "-- $text",
+        fontSize = 11.sp,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Bold,
+        color = HelixTheme.TextSecondary,
+        letterSpacing = 2.sp
+    )
+}
+
+// ══════════════════════════════════════════════════════════════
+// VOICE ENROLLMENT SCREEN
+// ══════════════════════════════════════════════════════════════
 
 private val ENROLLMENT_PHRASES = listOf(
     "The quick brown fox jumps over the lazy dog",
@@ -1216,9 +1710,6 @@ private const val PHRASE_TIMEOUT_MS = 15000L
 
 enum class EnrollStep { INTRO, LISTENING, MATCHED, PROCESSING, COMPLETE, ERROR }
 
-/**
- * Fuzzy match: checks if 60%+ of target words appear in the spoken text.
- */
 private fun phrasesMatch(spoken: String, target: String): Boolean {
     val spokenWords = spoken.lowercase().split("\\s+".toRegex()).filter { it.isNotBlank() }
     val targetWords = target.lowercase().split("\\s+".toRegex()).filter { it.isNotBlank() }
@@ -1242,12 +1733,10 @@ fun VoiceEnrollmentScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var heardText by remember { mutableStateOf("") }
     var timedOut by remember { mutableStateOf(false) }
-    // Key to force-restart LaunchedEffects on retry
     var listenKey by remember { mutableIntStateOf(0) }
     val pcmChunks = remember { mutableListOf<ByteArray>() }
     val scope = rememberCoroutineScope()
 
-    // Dedicated WS client for enrollment transcription
     val enrollWsClient = remember { LocalServerClient(serverUrl) }
     val enrollSegments by enrollWsClient.segments.collectAsState()
     val enrollPartial by enrollWsClient.partialText.collectAsState()
@@ -1259,7 +1748,6 @@ fun VoiceEnrollmentScreen(
         }
     }
 
-    // Pulse animation for listening indicator
     val infiniteTransition = rememberInfiniteTransition(label = "enrollPulse")
     val pulseAlpha by infiniteTransition.animateFloat(
         initialValue = 0.3f,
@@ -1271,25 +1759,21 @@ fun VoiceEnrollmentScreen(
         label = "pulseAlpha"
     )
 
-    // Build accumulated transcription text from segments + partial
     val accumulatedText = remember(enrollSegments, enrollPartial) {
         val segText = enrollSegments.joinToString(" ") { it.text }
         if (enrollPartial.isNotBlank()) "$segText $enrollPartial".trim() else segText.trim()
     }
 
-    // Update heardText display
     LaunchedEffect(accumulatedText) {
         if (step == EnrollStep.LISTENING && !timedOut) {
             heardText = accumulatedText
         }
     }
 
-    // Check for phrase match whenever accumulated text changes
     LaunchedEffect(accumulatedText, step, currentPhraseIndex) {
         if (step == EnrollStep.LISTENING && !timedOut && accumulatedText.isNotBlank()) {
             val targetPhrase = ENROLLMENT_PHRASES[currentPhraseIndex].replace("%s", speakerName)
             if (phrasesMatch(accumulatedText, targetPhrase)) {
-                // Match! Stop collecting, save chunk
                 val chunk = voiceProfileManager.stopCollecting()
                 pcmChunks.add(chunk)
                 enrollWsClient.stop()
@@ -1298,7 +1782,6 @@ fun VoiceEnrollmentScreen(
         }
     }
 
-    // Feed BLE audio to enrollment WS when listening
     LaunchedEffect(step, listenKey) {
         if (step == EnrollStep.LISTENING) {
             bleManager.audioFrames.collect { frame ->
@@ -1309,7 +1792,6 @@ fun VoiceEnrollmentScreen(
         }
     }
 
-    // Timeout: if no match after PHRASE_TIMEOUT_MS
     LaunchedEffect(step, currentPhraseIndex, listenKey) {
         if (step == EnrollStep.LISTENING) {
             timedOut = false
@@ -1322,7 +1804,6 @@ fun VoiceEnrollmentScreen(
         }
     }
 
-    // Auto-advance after showing checkmark
     LaunchedEffect(step, currentPhraseIndex) {
         if (step == EnrollStep.MATCHED) {
             kotlinx.coroutines.delay(800)
@@ -1340,7 +1821,6 @@ fun VoiceEnrollmentScreen(
         }
     }
 
-    // Processing: combine chunks and send to server
     LaunchedEffect(step) {
         if (step == EnrollStep.PROCESSING) {
             kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -1372,36 +1852,46 @@ fun VoiceEnrollmentScreen(
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Top bar with back
+        // Top bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (step == EnrollStep.INTRO || step == EnrollStep.COMPLETE || step == EnrollStep.ERROR || timedOut) {
-                IconButton(onClick = {
-                    enrollWsClient.stop()
-                    try { voiceProfileManager.stopCollecting() } catch (_: Exception) {}
-                    onBack()
-                }) {
-                    Text("\u2190", fontSize = 24.sp, color = Color.White)
+                TextButton(
+                    onClick = {
+                        enrollWsClient.stop()
+                        try { voiceProfileManager.stopCollecting() } catch (_: Exception) {}
+                        onBack()
+                    },
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text(
+                        "<-",
+                        fontSize = 18.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.Cyan
+                    )
                 }
             }
             Spacer(modifier = Modifier.weight(1f))
-            // Progress dots
+            // Progress squares instead of dots
             if (step == EnrollStep.LISTENING || step == EnrollStep.MATCHED) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (i in ENROLLMENT_PHRASES.indices) {
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
-                                .clip(CircleShape)
                                 .background(
-                                    if (i < currentPhraseIndex) Color(0xFF00CC88)
-                                    else if (i == currentPhraseIndex && step == EnrollStep.MATCHED) Color(0xFF00CC88)
-                                    else if (i == currentPhraseIndex) Color(0xFFFF4444)
-                                    else Color(0xFF333333)
+                                    when {
+                                        i < currentPhraseIndex -> HelixTheme.Cyan
+                                        i == currentPhraseIndex && step == EnrollStep.MATCHED -> HelixTheme.Cyan
+                                        i == currentPhraseIndex -> HelixTheme.Danger
+                                        else -> HelixTheme.BorderDefault
+                                    },
+                                    RoundedCornerShape(1.dp)
                                 )
                         )
                     }
@@ -1415,48 +1905,68 @@ fun VoiceEnrollmentScreen(
         when (step) {
             EnrollStep.INTRO -> {
                 Text(
-                    "Let's learn your voice",
-                    fontSize = 28.sp,
+                    "VOICE ENROLLMENT",
+                    fontSize = 22.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = HelixTheme.TextPrimary,
+                    letterSpacing = 2.sp
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     "Make sure Helix-Mic is connected and close to your mouth.",
-                    fontSize = 16.sp,
-                    color = Color(0xFF999999),
-                    lineHeight = 24.sp
+                    fontSize = 14.sp,
+                    color = HelixTheme.TextSecondary,
+                    lineHeight = 22.sp
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     "You'll read 5 short phrases aloud. Each one is verified before moving on.",
-                    fontSize = 16.sp,
-                    color = Color(0xFF999999),
-                    lineHeight = 24.sp
+                    fontSize = 14.sp,
+                    color = HelixTheme.TextSecondary,
+                    lineHeight = 22.sp
                 )
 
                 Spacer(modifier = Modifier.height(32.dp))
 
-                // Name input
-                Text("Your name", fontSize = 13.sp, color = Color.Gray)
+                Text(
+                    "YOUR NAME",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextSecondary,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = speakerName,
                     onValueChange = { speakerName = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("You", color = Color(0xFF444444)) },
+                    placeholder = {
+                        Text(
+                            "You",
+                            color = HelixTheme.TextMuted,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    },
                     singleLine = true,
+                    shape = HelixTheme.InputShape,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFFFF4444),
-                        unfocusedBorderColor = Color(0xFF333333),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        focusedBorderColor = HelixTheme.Cyan,
+                        unfocusedBorderColor = HelixTheme.BorderDefault,
+                        focusedTextColor = HelixTheme.TextPrimary,
+                        unfocusedTextColor = HelixTheme.TextPrimary,
+                        cursorColor = HelixTheme.Cyan
+                    ),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp
                     )
                 )
 
                 Spacer(modifier = Modifier.height(32.dp))
 
-                Button(
+                OutlinedButton(
                     onClick = {
                         if (speakerName.isBlank()) speakerName = "You"
                         pcmChunks.clear()
@@ -1470,19 +1980,23 @@ fun VoiceEnrollmentScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp),
+                        .height(48.dp),
                     enabled = isDeviceConnected,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF4444),
-                        disabledContainerColor = Color(0xFF333333)
-                    ),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = HelixTheme.ButtonShape,
+                    border = BorderStroke(1.dp, 
+                            if (isDeviceConnected) HelixTheme.Cyan else HelixTheme.TextMuted
+                        ),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = HelixTheme.Cyan,
+                        disabledContentColor = HelixTheme.TextMuted
+                    )
                 ) {
                     Text(
-                        "Start",
-                        fontSize = 18.sp,
+                        "START",
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        letterSpacing = 2.sp
                     )
                 }
 
@@ -1490,66 +2004,63 @@ fun VoiceEnrollmentScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "Connect Helix-Mic to continue",
-                        fontSize = 13.sp,
-                        color = Color(0xFFFF4444)
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.Danger
                     )
                 }
             }
 
             EnrollStep.LISTENING -> {
                 if (timedOut) {
-                    // Timeout — didn't catch the phrase
                     Text(
-                        "Didn't catch that",
-                        fontSize = 22.sp,
+                        "TIMEOUT",
+                        fontSize = 20.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFFFAA00)
+                        color = HelixTheme.Warning,
+                        letterSpacing = 2.sp
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "Phrase ${currentPhraseIndex + 1} of ${ENROLLMENT_PHRASES.size}",
-                        fontSize = 14.sp,
-                        color = Color(0xFF666666)
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextSecondary
                     )
 
                     Spacer(modifier = Modifier.height(24.dp))
 
                     val phrase = ENROLLMENT_PHRASES[currentPhraseIndex].replace("%s", speakerName)
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, HelixTheme.BorderDefault, HelixTheme.CardShape)
+                            .background(HelixTheme.SurfaceCard, HelixTheme.CardShape)
+                            .padding(24.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "\"$phrase\"",
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color.White,
-                                lineHeight = 32.sp,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
+                        Text(
+                            text = "\"$phrase\"",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = HelixTheme.TextPrimary,
+                            lineHeight = 28.sp
+                        )
                     }
 
                     if (heardText.isNotBlank()) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             "Heard: $heardText",
-                            fontSize = 14.sp,
-                            color = Color(0xFF888888),
+                            fontSize = 13.sp,
+                            color = HelixTheme.TextSecondary,
                             fontStyle = FontStyle.Italic
                         )
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    Button(
+                    OutlinedButton(
                         onClick = {
                             heardText = ""
                             timedOut = false
@@ -1557,32 +2068,41 @@ fun VoiceEnrollmentScreen(
                             enrollWsClient.clear()
                             enrollWsClient.start()
                             voiceProfileManager.startCollecting(bleManager.audioFrames, scope)
-                            // step stays LISTENING, listenKey change restarts effects
                         },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFF4444)
-                        ),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = HelixTheme.ButtonShape,
+                        border = BorderStroke(1.dp, HelixTheme.Cyan),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = HelixTheme.Cyan
+                        )
                     ) {
-                        Text("Try Again", fontSize = 16.sp, color = Color.White)
+                        Text(
+                            "TRY AGAIN",
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 1.sp
+                        )
                     }
                 } else {
                     // Active listening
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(12.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFFF4444).copy(alpha = pulseAlpha))
+                                .size(10.dp)
+                                .background(
+                                    HelixTheme.Danger.copy(alpha = pulseAlpha),
+                                    RoundedCornerShape(1.dp)
+                                )
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "Listening...",
-                            fontSize = 14.sp,
-                            color = Color(0xFFFF4444).copy(alpha = pulseAlpha)
+                            "LISTENING...",
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = HelixTheme.Danger.copy(alpha = pulseAlpha),
+                            letterSpacing = 1.sp
                         )
                     }
 
@@ -1590,65 +2110,60 @@ fun VoiceEnrollmentScreen(
 
                     Text(
                         "Phrase ${currentPhraseIndex + 1} of ${ENROLLMENT_PHRASES.size}",
-                        fontSize = 14.sp,
-                        color = Color(0xFF666666)
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextSecondary
                     )
 
                     Spacer(modifier = Modifier.height(32.dp))
 
-                    // The phrase to say
                     val phrase = ENROLLMENT_PHRASES[currentPhraseIndex].replace("%s", speakerName)
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, HelixTheme.BorderDefault, HelixTheme.CardShape)
+                            .background(HelixTheme.SurfaceCard, HelixTheme.CardShape)
+                            .padding(24.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "\"$phrase\"",
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color.White,
-                                lineHeight = 32.sp,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
+                        Text(
+                            text = "\"$phrase\"",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = HelixTheme.TextPrimary,
+                            lineHeight = 28.sp
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Live feedback
                     if (heardText.isNotBlank()) {
                         Text(
                             "Heard: $heardText",
-                            fontSize = 14.sp,
-                            color = Color(0xFF888888),
+                            fontSize = 13.sp,
+                            color = HelixTheme.TextSecondary,
                             fontStyle = FontStyle.Italic,
                             lineHeight = 20.sp
                         )
                     } else if (enrollConnected) {
                         Text(
                             "Say the phrase above...",
-                            fontSize = 14.sp,
-                            color = Color(0xFF555555)
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = HelixTheme.TextMuted
                         )
                     } else {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                color = Color(0xFFFF4444),
-                                strokeWidth = 2.dp
+                                modifier = Modifier.size(12.dp),
+                                color = HelixTheme.Cyan,
+                                strokeWidth = 1.5.dp
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 "Connecting to server...",
-                                fontSize = 14.sp,
-                                color = Color(0xFF555555)
+                                fontSize = 13.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = HelixTheme.TextMuted
                             )
                         }
                     }
@@ -1657,96 +2172,109 @@ fun VoiceEnrollmentScreen(
 
             EnrollStep.MATCHED -> {
                 Text(
-                    "✓",
-                    fontSize = 64.sp,
-                    color = Color(0xFF00CC88)
+                    "[v]",
+                    fontSize = 48.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.Cyan
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    "Phrase ${currentPhraseIndex + 1} matched!",
-                    fontSize = 18.sp,
-                    color = Color(0xFF00CC88)
+                    "PHRASE ${currentPhraseIndex + 1} MATCHED",
+                    fontSize = 16.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.Cyan,
+                    letterSpacing = 1.sp
                 )
             }
 
             EnrollStep.PROCESSING -> {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(48.dp),
-                    color = Color(0xFFFF4444),
-                    strokeWidth = 4.dp
+                    modifier = Modifier.size(40.dp),
+                    color = HelixTheme.Cyan,
+                    strokeWidth = 2.dp
                 )
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(
-                    "Processing your voice profile...",
-                    fontSize = 18.sp,
-                    color = Color.White
+                    "PROCESSING VOICE PROFILE...",
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextPrimary,
+                    letterSpacing = 1.sp
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     "This may take a moment",
-                    fontSize = 14.sp,
-                    color = Color(0xFF666666)
+                    fontSize = 12.sp,
+                    color = HelixTheme.TextSecondary
                 )
             }
 
             EnrollStep.COMPLETE -> {
                 Text(
-                    "✓",
-                    fontSize = 48.sp,
-                    color = Color(0xFF00CC88)
+                    "[v]",
+                    fontSize = 40.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.Cyan
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    "Voice profile created!",
-                    fontSize = 28.sp,
+                    "VOICE PROFILE CREATED",
+                    fontSize = 20.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF00CC88)
+                    color = HelixTheme.Cyan,
+                    letterSpacing = 2.sp
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    "I'll recognize you during transcription.",
-                    fontSize = 16.sp,
-                    color = Color(0xFF999999)
+                    "Your voice will be recognized during transcription.",
+                    fontSize = 14.sp,
+                    color = HelixTheme.TextSecondary
                 )
 
                 Spacer(modifier = Modifier.height(48.dp))
 
-                Button(
+                OutlinedButton(
                     onClick = { onComplete(true) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF4444)
-                    ),
-                    shape = RoundedCornerShape(16.dp)
+                        .height(48.dp),
+                    shape = HelixTheme.ButtonShape,
+                    border = BorderStroke(1.dp, HelixTheme.Cyan),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = HelixTheme.Cyan
+                    )
                 ) {
                     Text(
-                        "Done",
-                        fontSize = 18.sp,
+                        "DONE",
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        letterSpacing = 2.sp
                     )
                 }
             }
 
             EnrollStep.ERROR -> {
                 Text(
-                    "Enrollment failed",
-                    fontSize = 28.sp,
+                    "ENROLLMENT FAILED",
+                    fontSize = 20.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFFF4444)
+                    color = HelixTheme.Danger,
+                    letterSpacing = 2.sp
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     errorMessage ?: "Unknown error",
-                    fontSize = 16.sp,
-                    color = Color(0xFF999999)
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextSecondary
                 )
 
                 Spacer(modifier = Modifier.height(48.dp))
 
-                Button(
+                OutlinedButton(
                     onClick = {
                         pcmChunks.clear()
                         currentPhraseIndex = 0
@@ -1757,17 +2285,19 @@ fun VoiceEnrollmentScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF4444)
-                    ),
-                    shape = RoundedCornerShape(16.dp)
+                        .height(48.dp),
+                    shape = HelixTheme.ButtonShape,
+                    border = BorderStroke(1.dp, HelixTheme.Cyan),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = HelixTheme.Cyan
+                    )
                 ) {
                     Text(
-                        "Try Again",
-                        fontSize = 18.sp,
+                        "TRY AGAIN",
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        letterSpacing = 2.sp
                     )
                 }
             }
