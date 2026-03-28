@@ -52,7 +52,7 @@ static struct adc_channel_cfg adc_cfg = {
 };
 
 /* Forward declarations */
-static void audio_frame_handler(struct audio_frame *frame);
+static void audio_frame_handler(int16_t *buf, size_t num_samples);
 static void connection_changed(bool connected);
 static void on_connect_start_mic(void);
 static int init_battery_adc(void);
@@ -146,7 +146,7 @@ int main(void)
     return 0;
 }
 
-static void audio_frame_handler(struct audio_frame *frame)
+static void audio_frame_handler(int16_t *buf, size_t num_samples)
 {
     struct encoded_frame encoded;
     int ret;
@@ -159,7 +159,7 @@ static void audio_frame_handler(struct audio_frame *frame)
     led_notify_audio();
     
     /* Encode frame (currently PCM passthrough) */
-    ret = codec_encode(frame->samples, frame->len, &encoded);
+    ret = codec_encode(buf, num_samples, &encoded);
     if (ret < 0) {
         LOG_WRN("Encode failed");
         return;

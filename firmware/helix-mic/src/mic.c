@@ -1,138 +1,117 @@
 /*
- * Helix-Mic - PDM Microphone Capture for XIAO nRF52840 Sense
+ * Helix-Mic - PDM Microphone Capture using nrfx_pdm directly
+ *
+ * Uses double-buffered nrfx_pdm with IRQ_DIRECT_CONNECT.
+ * Based on proven nRF52840 PDM approach from BasedHardware/omi.
  */
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(mic, CONFIG_LOG_DEFAULT_LEVEL);
 
 #include "mic.h"
-#include <zephyr/drivers/gpio.h>
 
-/* Try DT_ALIAS first, fallback to node labels */
-#if DT_NODE_EXISTS(DT_ALIAS(dmic_dev))
-#define DMIC_DEV DT_ALIAS(dmic_dev)
-#elif DT_NODE_EXISTS(DT_NODELABEL(dmic0))
-#define DMIC_DEV DT_NODELABEL(dmic0)
-#elif DT_NODE_EXISTS(DT_NODELABEL(pdm0))
-#define DMIC_DEV DT_NODELABEL(pdm0)
-#else
-#error "No DMIC/PDM device found in device tree"
-#endif
-#define BUF_COUNT    4
-#define STREAM_ID    0
+#include <nrfx_pdm.h>
+#include <hal/nrf_clock.h>
+#include <hal/nrf_gpio.h>
+#include <zephyr/irq.h>
 
-static const struct device *dmic_dev;
-static mic_frame_cb_t frame_callback = NULL;
-static volatile bool running = false;
-static uint16_t sequence = 0;
+/* Double buffers for PDM DMA */
+static int16_t pdm_buf_0[SAMPLES_PER_FRAME];
+static int16_t pdm_buf_1[SAMPLES_PER_FRAME];
+static volatile uint8_t next_buf_idx = 0;
 
-/* Memory slab for DMA buffers */
-K_MEM_SLAB_DEFINE(rx_mem_slab, 
-                  SAMPLES_PER_FRAME * sizeof(int16_t), 
-                  BUF_COUNT, 4);
+static volatile mic_frame_cb_t frame_callback = NULL;
+static volatile bool pdm_running = false;
 
-/* PDM stream configuration */
-static struct pcm_stream_cfg pcm_cfg = {
-    .pcm_rate = SAMPLE_RATE,
-    .pcm_width = SAMPLE_BITS,
-    .block_size = SAMPLES_PER_FRAME * sizeof(int16_t),
-    .mem_slab = &rx_mem_slab,
-};
-
-static struct dmic_cfg dmic_config = {
-    .io = {
-        /* nRF52840 PDM clock range for 16kHz sampling */
-        .min_pdm_clk_freq = 1000000,
-        .max_pdm_clk_freq = 3500000,
-    },
-    .streams = &pcm_cfg,
-    .channel = {
-        .req_num_streams = 1,
-        .req_num_chan = NUM_CHANNELS,
-        .req_chan_map_hi = 0,
-    },
-};
-
-int mic_init(void)
+static void pdm_event_handler(nrfx_pdm_evt_t const *event)
 {
-    dmic_dev = DEVICE_DT_GET(DMIC_DEV);
-    if (!device_is_ready(dmic_dev)) {
-        LOG_ERR("PDM device not ready");
-        return -ENODEV;
+    if (event->error) {
+        LOG_ERR("PDM error: %d", event->error);
+        return;
     }
 
-    /* Set channel map at runtime (dmic_build_channel_map is not constexpr) */
-    dmic_config.channel.req_chan_map_lo =
-        dmic_build_channel_map(0, 0, PDM_CHAN_LEFT);
+    /* Provide next buffer to PDM DMA */
+    if (event->buffer_requested) {
+        if (next_buf_idx == 0) {
+            nrfx_pdm_buffer_set(pdm_buf_0, SAMPLES_PER_FRAME);
+            next_buf_idx = 1;
+        } else {
+            nrfx_pdm_buffer_set(pdm_buf_1, SAMPLES_PER_FRAME);
+            next_buf_idx = 0;
+        }
+    }
 
-    LOG_INF("PDM microphone initialized");
-    return 0;
-}
-
-static void dmic_thread_fn(void *arg1, void *arg2, void *arg3)
-{
-    void *buffer;
-    size_t size;
-    struct audio_frame frame;
-
-    while (running) {
-        if (dmic_read(dmic_dev, STREAM_ID, &buffer, &size, 100) == 0) {
-            frame.seq_num = sequence++;
-            frame.flags = 0;
-            frame.len = size / sizeof(int16_t);
-            
-            if (frame.len <= SAMPLES_PER_FRAME) {
-                memcpy(frame.samples, buffer, size);
-                
-                if (frame_callback) {
-                    frame_callback(&frame);
-                }
-            }
-            
-            k_mem_slab_free(&rx_mem_slab, buffer);
+    /* Deliver completed buffer to consumer */
+    if (event->buffer_released) {
+        if (frame_callback) {
+            frame_callback(event->buffer_released,
+                           SAMPLES_PER_FRAME);
         }
     }
 }
 
-K_THREAD_STACK_DEFINE(dmic_stack, 8192);
-static struct k_thread dmic_thread;
+int mic_init(void)
+{
+    LOG_INF("PDM microphone initialized (nrfx direct)");
+    return 0;
+}
 
 int mic_start(void)
 {
-    int ret;
+    nrfx_err_t err;
 
-    ret = dmic_configure(dmic_dev, &dmic_config);
-    if (ret < 0) {
-        LOG_ERR("DMIC configure failed: %d", ret);
-        return ret;
+    if (pdm_running) {
+        LOG_WRN("PDM already running");
+        return 0;
     }
 
-    ret = dmic_trigger(dmic_dev, DMIC_TRIGGER_START);
-    if (ret < 0) {
-        LOG_ERR("DMIC start failed: %d", ret);
-        return ret;
+    /* Ensure HFCLK is running — required for PDM */
+    if (!nrf_clock_hf_is_running(NRF_CLOCK, NRF_CLOCK_HFCLK_HIGH_ACCURACY)) {
+        nrf_clock_task_trigger(NRF_CLOCK, NRF_CLOCK_TASK_HFCLKSTART);
     }
 
-    running = true;
-    
-    k_thread_create(&dmic_thread, dmic_stack,
-                    K_THREAD_STACK_SIZEOF(dmic_stack),
-                    dmic_thread_fn, NULL, NULL, NULL,
-                    5, 0, K_NO_WAIT);
-    k_thread_name_set(&dmic_thread, "dmic");
+    /* Configure PDM */
+    nrfx_pdm_config_t cfg = NRFX_PDM_DEFAULT_CONFIG(PDM_CLK_PIN, PDM_DIN_PIN);
+    cfg.clock_freq  = NRF_PDM_FREQ_1280K;
+    cfg.mode        = NRF_PDM_MODE_MONO;
+    cfg.edge        = NRF_PDM_EDGE_LEFTFALLING;
+    cfg.ratio       = NRF_PDM_RATIO_80X;
 
-    LOG_INF("PDM capture started");
+    /* Wire the IRQ directly — critical for nrfx_pdm on Zephyr */
+    IRQ_DIRECT_CONNECT(PDM_IRQn, 5, nrfx_pdm_irq_handler, 0);
+
+    err = nrfx_pdm_init(&cfg, pdm_event_handler);
+    if (err != NRFX_SUCCESS) {
+        LOG_ERR("nrfx_pdm_init failed: 0x%08x", err);
+        return -EIO;
+    }
+
+    /* Reset buffer index */
+    next_buf_idx = 0;
+
+    err = nrfx_pdm_start();
+    if (err != NRFX_SUCCESS) {
+        LOG_ERR("nrfx_pdm_start failed: 0x%08x", err);
+        nrfx_pdm_uninit();
+        return -EIO;
+    }
+
+    pdm_running = true;
+    LOG_INF("PDM capture started (nrfx, %d samples/frame, %d ms)",
+            SAMPLES_PER_FRAME, FRAME_SIZE_MS);
     return 0;
 }
 
 int mic_stop(void)
 {
-    running = false;
-    
-    dmic_trigger(dmic_dev, DMIC_TRIGGER_STOP);
-    
-    k_thread_join(&dmic_thread, K_MSEC(500));
-    
+    if (!pdm_running) {
+        return 0;
+    }
+
+    nrfx_pdm_stop();
+    nrfx_pdm_uninit();
+    pdm_running = false;
+
     LOG_INF("PDM capture stopped");
     return 0;
 }
