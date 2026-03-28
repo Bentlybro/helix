@@ -212,23 +212,45 @@ void loop() {
   }
 }
 
+// ============================================================
+// AXIS REMAP — adjust if orientation feels wrong when worn
+//
+// The XIAO sits behind/on the ear, so physical axes may not
+// match head axes. Change the signs or swap X/Y/Z here.
+//
+// Current mapping assumes USB port facing DOWN on right ear:
+//   Head YAW   (left/right turn) = IMU gyro Y
+//   Head PITCH (nod up/down)     = IMU gyro X
+//   Head ROLL  (tilt ear to shoulder) = IMU gyro Z
+//
+// If axes feel swapped, change which gyro/accel axis maps where.
+// If direction is inverted, flip the sign (e.g. -gyroX).
+// ============================================================
 void updateOrientation(float dt) {
-  float accelX = myIMU.readFloatAccelX();
-  float accelY = myIMU.readFloatAccelY();
-  float accelZ = myIMU.readFloatAccelZ();
-  float gyroX  = myIMU.readFloatGyroX();
-  float gyroY  = myIMU.readFloatGyroY();
-  float gyroZ  = myIMU.readFloatGyroZ();
+  float aX = myIMU.readFloatAccelX();
+  float aY = myIMU.readFloatAccelY();
+  float aZ = myIMU.readFloatAccelZ();
+  float gX = myIMU.readFloatGyroX();
+  float gY = myIMU.readFloatGyroY();
+  float gZ = myIMU.readFloatGyroZ();
 
-  float rollAccel  = atan2(accelY, accelZ) * RAD_TO_DEG;
-  float pitchAccel = atan2(-accelX, sqrt(accelY * accelY + accelZ * accelZ)) * RAD_TO_DEG;
+  // Remap to head space — tweak these if axes feel wrong
+  float accelRoll  = aY;   // which accel axis drives roll
+  float accelPitch = aX;   // which accel axis drives pitch
+  float accelRef   = aZ;   // reference axis (gravity)
+  float gyroRoll   = gZ;   // which gyro axis drives roll
+  float gyroPitch  = gX;   // which gyro axis drives pitch
+  float gyroYaw    = gY;   // which gyro axis drives yaw
 
-  yaw += gyroZ * dt;
+  float rollAccel  = atan2(accelRoll, accelRef) * RAD_TO_DEG;
+  float pitchAccel = atan2(-accelPitch, sqrt(accelRoll * accelRoll + accelRef * accelRef)) * RAD_TO_DEG;
+
+  yaw += gyroYaw * dt;
   if (yaw >  180.0) yaw -= 360.0;
   if (yaw < -180.0) yaw += 360.0;
 
-  roll  = alpha * (roll  + gyroX * dt) + (1.0 - alpha) * rollAccel;
-  pitch = alpha * (pitch + gyroY * dt) + (1.0 - alpha) * pitchAccel;
+  roll  = alpha * (roll  + gyroRoll  * dt) + (1.0 - alpha) * rollAccel;
+  pitch = alpha * (pitch + gyroPitch * dt) + (1.0 - alpha) * pitchAccel;
 }
 
 void sendBleData() {
