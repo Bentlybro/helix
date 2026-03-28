@@ -257,12 +257,12 @@ fun HeadVisualiser(orientation: Orientation) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(8.dp).background(Color(0xFF00D4FF), CircleShape))
                     Spacer(Modifier.width(4.dp))
-                    Text("Forward", fontSize = 9.sp, color = Color.Gray)
+                    Text("Up", fontSize = 9.sp, color = Color.Gray)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(8.dp).background(Color(0xFF00FF88), CircleShape))
                     Spacer(Modifier.width(4.dp))
-                    Text("Up", fontSize = 9.sp, color = Color.Gray)
+                    Text("Forward", fontSize = 9.sp, color = Color.Gray)
                 }
             }
         }
