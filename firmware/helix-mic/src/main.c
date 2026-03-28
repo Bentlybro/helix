@@ -14,6 +14,8 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #include <zephyr/device.h>
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/usb/usb_device.h>
+#include <zephyr/drivers/uart.h>
 
 #include "mic.h"
 #include "codec.h"
@@ -64,6 +66,14 @@ static volatile bool mic_running = false;
 int main(void)
 {
     int ret;
+    
+    /* Initialize USB CDC-ACM for serial logging */
+    ret = usb_enable(NULL);
+    if (ret < 0) {
+        printk("USB enable failed: %d\n", ret);
+    }
+    /* Wait for USB host enumeration so serial console is ready */
+    k_sleep(K_MSEC(1000));
     
     LOG_INF("Helix-Mic starting...");
     
@@ -169,28 +179,50 @@ static void on_connect_start_mic(void)
     int ret;
     
     if (mic_running) {
-        return;  /* Already running */
+        LOG_INF("Mic already running, skipping start");
+        return;
     }
     
-    LOG_INF("Starting audio stream");
+    LOG_INF("Starting audio stream...");
     ret = mic_start();
     if (ret < 0) {
-        LOG_ERR("Failed to start mic: %d", ret);
+        LOG_ERR("=== MIC START FAILED === error code: %d", ret);
+        switch (ret) {
+        case -ENODEV:
+            LOG_ERR("  Reason: PDM device not found/not ready");
+            break;
+        case -EINVAL:
+            LOG_ERR("  Reason: Invalid PDM configuration");
+            break;
+        case -EIO:
+            LOG_ERR("  Reason: I/O error during PDM start");
+            break;
+        case -EBUSY:
+            LOG_ERR("  Reason: PDM device busy");
+            break;
+        default:
+            LOG_ERR("  Reason: Unknown (check nrfx_pdm error codes)");
+            break;
+        }
     } else {
         mic_running = true;
+        LOG_INF("Mic started successfully");
     }
 }
 
 static void connection_changed(bool connected)
 {
     if (connected) {
+        LOG_INF("=== CONNECTION ESTABLISHED ===");
         /* Start in connected-idle; audio handler will switch to audio state */
         led_set_state(LED_STATE_CONNECTED_IDLE);
     } else {
-        LOG_INF("Client disconnected - stopping audio stream");
+        LOG_INF("=== CLIENT DISCONNECTED === stopping audio stream");
         int ret = mic_stop();
         if (ret < 0) {
-            LOG_ERR("Failed to stop mic: %d", ret);
+            LOG_ERR("Mic stop failed: %d", ret);
+        } else {
+            LOG_INF("Mic stopped cleanly");
         }
         mic_running = false;
         
@@ -198,7 +230,8 @@ static void connection_changed(bool connected)
         led_set_state(LED_STATE_DISCONNECTED);
         k_sleep(K_MSEC(300));
         
-        /* Restart advertising LED after disconnect */
+        /* Restart advertising */
+        LOG_INF("Restarting advertising after disconnect...");
         led_set_state(LED_STATE_ADVERTISING);
     }
 }
