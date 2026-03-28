@@ -439,10 +439,10 @@ fun TopStatusBar(
                 Spacer(modifier = Modifier.width(8.dp))
             }
             IconButton(onClick = onSessionsClick) {
-                Text("📋", fontSize = 18.sp)
+                Text("Sessions", fontSize = 12.sp, color = Color.Gray)
             }
             IconButton(onClick = onSettingsClick) {
-                Text("⚙", fontSize = 20.sp, color = Color.Gray)
+                Text("Settings", fontSize = 12.sp, color = Color.Gray)
             }
         }
     }
@@ -849,7 +849,7 @@ fun BatteryIndicator(percent: Int) {
         percent > 20 -> Color(0xFFFFAA00)
         else -> Color(0xFFFF4444)
     }
-    Text("🔋$percent%", fontSize = 12.sp, color = color, fontWeight = FontWeight.Medium)
+    Text("BAT $percent%", fontSize = 12.sp, color = color, fontWeight = FontWeight.Medium)
 }
 
 @Composable
