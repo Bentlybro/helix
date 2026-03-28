@@ -239,8 +239,8 @@ void updateOrientation(float dt) {
   float accelPitch = aX;   // which accel axis drives pitch
   float accelRef   = aZ;   // reference axis (gravity)
   float gyroRoll   = gZ;   // which gyro axis drives roll
-  float gyroPitch  = gX;   // which gyro axis drives pitch
-  float gyroYaw    = gY;   // which gyro axis drives yaw
+  float gyroPitch  = gY;   // which gyro axis drives pitch
+  float gyroYaw    = gX;   // which gyro axis drives yaw
 
   float rollAccel  = atan2(accelRoll, accelRef) * RAD_TO_DEG;
   float pitchAccel = atan2(-accelPitch, sqrt(accelRoll * accelRoll + accelRef * accelRef)) * RAD_TO_DEG;
