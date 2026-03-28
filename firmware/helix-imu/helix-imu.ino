@@ -21,9 +21,14 @@
 #define BATTERY_UUID      "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
 #define TEMPERATURE_UUID  "917649A3-D98E-11E5-9EEC-0002A5D5C51B"
 
-// Battery pins (XIAO nRF52840 - non-mbed pin numbers)
-#define BAT_READ_PIN   32   // P0_31 = A0 = pin 32
-#define BAT_ENABLE_PIN 14   // P0_14 = pin 14, pull LOW to enable battery read
+// Battery pins (XIAO nRF52840 - non-mbed package)
+// PIN_VBAT and VBAT_ENABLE are defined in the Seeed board variant
+#ifndef PIN_VBAT
+  #define PIN_VBAT A0   // fallback
+#endif
+#ifndef VBAT_ENABLE_PIN
+  #define VBAT_ENABLE_PIN 14
+#endif
 
 // IMU
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
@@ -67,24 +72,35 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
 }
 
 uint8_t readBatteryPercent() {
-  // Enable the battery read circuit
-  pinMode(BAT_ENABLE_PIN, OUTPUT);
-  digitalWrite(BAT_ENABLE_PIN, LOW);
-  delay(1); // Let it settle
+  // Enable the battery read circuit (pull VBAT_ENABLE low)
+  pinMode(VBAT_ENABLE_PIN, OUTPUT);
+  digitalWrite(VBAT_ENABLE_PIN, LOW);
+  delay(10); // Let ADC settle
 
-  // Read ADC — 12-bit, 3.6V reference
+  // 12-bit ADC, internal 3.6V reference
   analogReadResolution(12);
-  int raw = analogRead(BAT_READ_PIN);
+  analogReference(AR_INTERNAL_3_0); // Use 3.0V reference for better accuracy
+
+  // Oversample — average 8 reads for stability
+  int raw = 0;
+  for (int i = 0; i < 8; i++) {
+    raw += analogRead(PIN_VBAT);
+    delay(1);
+  }
+  raw /= 8;
 
   // Disable to save power
-  digitalWrite(BAT_ENABLE_PIN, HIGH);
+  digitalWrite(VBAT_ENABLE_PIN, HIGH);
 
-  // Convert: voltage divider is 1/2, reference is 3.6V
-  // voltage = raw * (3.6 / 4096) * 2
-  float voltage = raw * (3.6f / 4096.0f) * 2.0f;
+  // Voltage divider on XIAO is 1/2
+  // voltage = raw * (3.0 / 4096) * 2
+  float voltage = raw * (3.0f / 4096.0f) * 2.0f;
 
-  // Map 3.0V (0%) to 4.2V (100%)
-  float percent = (voltage - 3.0f) / (4.2f - 3.0f) * 100.0f;
+  Serial.print("BAT raw:"); Serial.print(raw);
+  Serial.print(" voltage:"); Serial.println(voltage, 3);
+
+  // Map 3.2V (0%) to 4.2V (100%) — 3.0V is really empty
+  float percent = (voltage - 3.2f) / (4.2f - 3.2f) * 100.0f;
   percent = constrain(percent, 0.0f, 100.0f);
 
   return (uint8_t)percent;
@@ -95,8 +111,8 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH);
 
   // Disable battery read circuit by default (saves power)
-  pinMode(BAT_ENABLE_PIN, OUTPUT);
-  digitalWrite(BAT_ENABLE_PIN, HIGH);
+  pinMode(VBAT_ENABLE_PIN, OUTPUT);
+  digitalWrite(VBAT_ENABLE_PIN, HIGH);
 
   Serial.begin(115200);
   unsigned long t = millis();
