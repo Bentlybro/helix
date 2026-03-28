@@ -11,6 +11,7 @@ LOG_MODULE_REGISTER(mic, CONFIG_LOG_DEFAULT_LEVEL);
 #include "mic.h"
 
 #include <zephyr/audio/dmic.h>
+#include <zephyr/drivers/gpio.h>
 
 /* Buffer management — DMIC driver allocates from this slab */
 #define BYTES_PER_SAMPLE  sizeof(int16_t)
@@ -87,6 +88,17 @@ int mic_start(void)
 		return 0;
 	}
 
+	/* Force mic power on — regulator-fixed may not work on all boards */
+	const struct device *gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+	if (device_is_ready(gpio1)) {
+		gpio_pin_configure(gpio1, 10, GPIO_OUTPUT_ACTIVE);
+		gpio_pin_set(gpio1, 10, 1);
+		LOG_INF("Mic power P1.10 forced HIGH");
+		k_sleep(K_MSEC(50)); /* Let mic stabilize */
+	} else {
+		LOG_ERR("GPIO1 not ready — mic power may not be enabled!");
+	}
+
 	struct pcm_stream_cfg stream = {
 		.pcm_rate  = SAMPLE_RATE,
 		.pcm_width = SAMPLE_BITS,
@@ -105,7 +117,7 @@ int mic_start(void)
 		.channel = {
 			.req_num_streams = 1,
 			.req_num_chan = NUM_CHANNELS,
-			.req_chan_map_lo = dmic_build_channel_map(0, 0, PDM_CHAN_RIGHT),
+			.req_chan_map_lo = dmic_build_channel_map(0, 0, PDM_CHAN_LEFT),
 		},
 	};
 
