@@ -1,18 +1,7 @@
-# Gradle
-.gradle/
 build/
+*.apk
+*.aab
+.gradle/
 local.properties
-
-# IDE
-.idea/
 *.iml
-*.iws
-*.ipr
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Keystore (if ever added)
-*.jks
-*.keystore
+.idea/
