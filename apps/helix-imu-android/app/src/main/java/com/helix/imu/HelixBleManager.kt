@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 
 val SERVICE_UUID: UUID = UUID.fromString("917649A0-D98E-11E5-9EEC-0002A5D5C51B")
 val ORIENTATION_UUID: UUID = UUID.fromString("917649A1-D98E-11E5-9EEC-0002A5D5C51B")
@@ -20,15 +21,9 @@ val BATTERY_UUID: UUID = UUID.fromString("917649A2-D98E-11E5-9EEC-0002A5D5C51B")
 val TEMPERATURE_UUID: UUID = UUID.fromString("917649A3-D98E-11E5-9EEC-0002A5D5C51B")
 val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-data class Orientation(
-    val roll: Float = 0f,
-    val pitch: Float = 0f,
-    val yaw: Float = 0f
-)
+data class Orientation(val roll: Float = 0f, val pitch: Float = 0f, val yaw: Float = 0f)
 
-enum class ConnectionState {
-    DISCONNECTED, SCANNING, CONNECTING, CONNECTED
-}
+enum class ConnectionState { DISCONNECTED, SCANNING, CONNECTING, CONNECTED }
 
 @SuppressLint("MissingPermission")
 class HelixBleManager(private val context: Context) {
@@ -37,6 +32,10 @@ class HelixBleManager(private val context: Context) {
         (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
 
     private var gatt: BluetoothGatt? = null
+
+    // GATT operation queue — one at a time
+    private val gattQueue = ConcurrentLinkedQueue<() -> Unit>()
+    private var gattBusy = false
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState
@@ -56,10 +55,25 @@ class HelixBleManager(private val context: Context) {
     private val _temperature = MutableStateFlow<Float?>(null)
     val temperature: StateFlow<Float?> = _temperature
 
-    // Calibration offset — subtracted from every reading
     private var calibrationOffset = Orientation()
     private val _isCalibrated = MutableStateFlow(false)
     val isCalibrated: StateFlow<Boolean> = _isCalibrated
+
+    // Queue a GATT operation and execute if not busy
+    private fun enqueue(op: () -> Unit) {
+        gattQueue.add(op)
+        if (!gattBusy) nextGattOp()
+    }
+
+    private fun nextGattOp() {
+        val op = gattQueue.poll()
+        if (op != null) {
+            gattBusy = true
+            op()
+        } else {
+            gattBusy = false
+        }
+    }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -78,35 +92,61 @@ class HelixBleManager(private val context: Context) {
             } else {
                 _connectionState.value = ConnectionState.DISCONNECTED
                 _deviceAddress.value = null
+                _batteryPercent.value = null
+                _temperature.value = null
                 this@HelixBleManager.gatt = null
+                gattQueue.clear()
+                gattBusy = false
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             val service = gatt.getService(SERVICE_UUID) ?: return
 
-            // Subscribe to orientation
+            // Enable orientation notifications
             service.getCharacteristic(ORIENTATION_UUID)?.let { char ->
-                gatt.setCharacteristicNotification(char, true)
-                char.getDescriptor(CCCD_UUID)?.let {
-                    it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(it)
+                enqueue {
+                    gatt.setCharacteristicNotification(char, true)
+                    char.getDescriptor(CCCD_UUID)?.let {
+                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(it)
+                    } ?: nextGattOp()
                 }
             }
 
-            // Subscribe to battery
+            // Enable battery notifications + initial read
             service.getCharacteristic(BATTERY_UUID)?.let { char ->
-                gatt.setCharacteristicNotification(char, true)
-                gatt.readCharacteristic(char)
+                enqueue {
+                    gatt.setCharacteristicNotification(char, true)
+                    char.getDescriptor(CCCD_UUID)?.let {
+                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(it)
+                    } ?: nextGattOp()
+                }
+                enqueue { gatt.readCharacteristic(char) }
             }
 
-            // Subscribe to temperature
+            // Enable temperature notifications + initial read
             service.getCharacteristic(TEMPERATURE_UUID)?.let { char ->
-                gatt.setCharacteristicNotification(char, true)
-                gatt.readCharacteristic(char)
+                enqueue {
+                    gatt.setCharacteristicNotification(char, true)
+                    char.getDescriptor(CCCD_UUID)?.let {
+                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(it)
+                    } ?: nextGattOp()
+                }
+                enqueue { gatt.readCharacteristic(char) }
             }
 
             _connectionState.value = ConnectionState.CONNECTED
+        }
+
+        override fun onDescriptorWrite(
+            gatt: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int
+        ) {
+            nextGattOp()
         }
 
         override fun onCharacteristicRead(
@@ -114,12 +154,14 @@ class HelixBleManager(private val context: Context) {
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            if (status != BluetoothGatt.GATT_SUCCESS) return
-            when (characteristic.uuid) {
-                BATTERY_UUID -> _batteryPercent.value =
-                    characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
-                TEMPERATURE_UUID -> _temperature.value = parseFloat(characteristic.value)
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                when (characteristic.uuid) {
+                    BATTERY_UUID -> _batteryPercent.value =
+                        characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+                    TEMPERATURE_UUID -> _temperature.value = parseFloat(characteristic.value)
+                }
             }
+            nextGattOp()
         }
 
         override fun onCharacteristicChanged(
@@ -144,22 +186,17 @@ class HelixBleManager(private val context: Context) {
         if (data.size < 12) return
         val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
         val raw = Orientation(roll = buf.float, pitch = buf.float, yaw = buf.float)
-
-        // Apply calibration offset
         val calibrated = Orientation(
             roll = raw.roll - calibrationOffset.roll,
             pitch = raw.pitch - calibrationOffset.pitch,
             yaw = wrapAngle(raw.yaw - calibrationOffset.yaw)
         )
-
         _orientation.value = calibrated
         _log.value = (_log.value + calibrated).takeLast(100)
     }
 
-    /** Set current orientation as zero reference */
     fun calibrate() {
         calibrationOffset = _orientation.value.let {
-            // Need to capture the raw value before offset — store raw separately
             Orientation(
                 roll = it.roll + calibrationOffset.roll,
                 pitch = it.pitch + calibrationOffset.pitch,
@@ -197,8 +234,12 @@ class HelixBleManager(private val context: Context) {
         gatt?.disconnect()
         gatt?.close()
         gatt = null
+        gattQueue.clear()
+        gattBusy = false
         _connectionState.value = ConnectionState.DISCONNECTED
         _deviceAddress.value = null
+        _batteryPercent.value = null
+        _temperature.value = null
     }
 
     fun clearLog() {
