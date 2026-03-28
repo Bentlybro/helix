@@ -104,6 +104,12 @@ static void pusher_entry(void *p1, void *p2, void *p3)
 
             if (ret == 0) {
                 pusher_seq++;
+                if (pusher_seq % 100 == 1) {
+                    LOG_INF("Audio pusher: sent %u packets, ring=%u",
+                            pusher_seq, ring_buf_size_get(&audio_ring_buf));
+                }
+            } else if (pusher_seq < 5) {
+                LOG_WRN("Audio send failed: %d (seq=%u)", ret, pusher_seq);
             }
         }
     }
