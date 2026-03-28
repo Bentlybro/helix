@@ -1,4 +1,5 @@
 /* XIAO nRF52840 Sense overlay for Helix-Mic — Zephyr DMIC API */
+/* PDM pins per Seeed variant.cpp: CLK=P1.0, DATA=P0.16, PWR=P1.10 */
 
 #include <zephyr/dt-bindings/gpio/gpio.h>
 
@@ -14,8 +15,8 @@
 &pinctrl {
 	pdm0_default_alt: pdm0_default_alt {
 		group1 {
-			psels = <NRF_PSEL(PDM_CLK, 0, 16)>,
-				<NRF_PSEL(PDM_DIN, 0, 17)>;
+			psels = <NRF_PSEL(PDM_CLK, 1, 0)>,   /* P1.0 = D20 = PDM_CLK */
+				<NRF_PSEL(PDM_DIN, 0, 16)>;  /* P0.16 = D21 = PDM_DATA */
 		};
 	};
 };
