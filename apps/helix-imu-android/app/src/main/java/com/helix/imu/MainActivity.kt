@@ -57,6 +57,7 @@ fun HelixIMUApp(bleManager: HelixBleManager) {
     val log by bleManager.log.collectAsState()
     val isCalibrated by bleManager.isCalibrated.collectAsState()
     val batteryPercent by bleManager.batteryPercent.collectAsState()
+    val temperature by bleManager.temperature.collectAsState()
 
     val blePermissions = rememberMultiplePermissionsState(
         permissions = listOf(
@@ -93,6 +94,10 @@ fun HelixIMUApp(bleManager: HelixBleManager) {
                         color = MaterialTheme.colorScheme.primary)
                     Row(verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (temperature != null) {
+                            Text("%.1f°C".format(temperature),
+                                fontSize = 12.sp, color = Color(0xFFFFAA00))
+                        }
                         if (batteryPercent != null) {
                             BatteryIndicator(batteryPercent!!)
                         }

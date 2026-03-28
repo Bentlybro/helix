@@ -17,6 +17,7 @@ import java.util.UUID
 val SERVICE_UUID: UUID = UUID.fromString("917649A0-D98E-11E5-9EEC-0002A5D5C51B")
 val ORIENTATION_UUID: UUID = UUID.fromString("917649A1-D98E-11E5-9EEC-0002A5D5C51B")
 val BATTERY_UUID: UUID = UUID.fromString("917649A2-D98E-11E5-9EEC-0002A5D5C51B")
+val TEMPERATURE_UUID: UUID = UUID.fromString("917649A3-D98E-11E5-9EEC-0002A5D5C51B")
 val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
 data class Orientation(
@@ -51,6 +52,9 @@ class HelixBleManager(private val context: Context) {
 
     private val _batteryPercent = MutableStateFlow<Int?>(null)
     val batteryPercent: StateFlow<Int?> = _batteryPercent
+
+    private val _temperature = MutableStateFlow<Float?>(null)
+    val temperature: StateFlow<Float?> = _temperature
 
     // Calibration offset — subtracted from every reading
     private var calibrationOffset = Orientation()
@@ -90,8 +94,14 @@ class HelixBleManager(private val context: Context) {
                 }
             }
 
-            // Read initial battery value
+            // Subscribe to battery
             service.getCharacteristic(BATTERY_UUID)?.let { char ->
+                gatt.setCharacteristicNotification(char, true)
+                gatt.readCharacteristic(char)
+            }
+
+            // Subscribe to temperature
+            service.getCharacteristic(TEMPERATURE_UUID)?.let { char ->
                 gatt.setCharacteristicNotification(char, true)
                 gatt.readCharacteristic(char)
             }
@@ -104,8 +114,11 @@ class HelixBleManager(private val context: Context) {
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            if (characteristic.uuid == BATTERY_UUID && status == BluetoothGatt.GATT_SUCCESS) {
-                _batteryPercent.value = characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+            if (status != BluetoothGatt.GATT_SUCCESS) return
+            when (characteristic.uuid) {
+                BATTERY_UUID -> _batteryPercent.value =
+                    characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+                TEMPERATURE_UUID -> _temperature.value = parseFloat(characteristic.value)
             }
         }
 
@@ -117,8 +130,14 @@ class HelixBleManager(private val context: Context) {
                 ORIENTATION_UUID -> parseOrientation(characteristic.value)
                 BATTERY_UUID -> _batteryPercent.value =
                     characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+                TEMPERATURE_UUID -> _temperature.value = parseFloat(characteristic.value)
             }
         }
+    }
+
+    private fun parseFloat(data: ByteArray): Float? {
+        if (data.size < 4) return null
+        return ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).float
     }
 
     private fun parseOrientation(data: ByteArray) {

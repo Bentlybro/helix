@@ -19,6 +19,7 @@
 #define SERVICE_UUID      "917649A0-D98E-11E5-9EEC-0002A5D5C51B"
 #define ORIENTATION_UUID  "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
 #define BATTERY_UUID      "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
+#define TEMPERATURE_UUID  "917649A3-D98E-11E5-9EEC-0002A5D5C51B"
 
 // Battery pins (XIAO nRF52840)
 #define BAT_READ_PIN   P0_31   // ADC pin for battery voltage
@@ -31,16 +32,19 @@ LSM6DS3 myIMU(I2C_MODE, 0x6A);
 BLEService        helixService    = BLEService(SERVICE_UUID);
 BLECharacteristic orientationChar = BLECharacteristic(ORIENTATION_UUID);
 BLECharacteristic batteryChar     = BLECharacteristic(BATTERY_UUID);
+BLECharacteristic temperatureChar = BLECharacteristic(TEMPERATURE_UUID);
 
 // Sensor fusion state
 float roll = 0.0, pitch = 0.0, yaw = 0.0;
-unsigned long lastUpdate  = 0;
-unsigned long lastSerial  = 0;
-unsigned long lastBattery = 0;
+unsigned long lastUpdate     = 0;
+unsigned long lastSerial     = 0;
+unsigned long lastBattery    = 0;
+unsigned long lastTemperature = 0;
 const float alpha = 0.98;
 
 // Battery state
 uint8_t batteryPercent = 0;
+float temperature = 0.0;
 
 void blink(int times, int ms = 200) {
   for (int i = 0; i < times; i++) {
@@ -136,6 +140,13 @@ void setup() {
   batteryChar.begin();
   batteryChar.write8(batteryPercent);
 
+  // Temperature: 4 bytes (float32, °C)
+  temperatureChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  temperatureChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  temperatureChar.setFixedLen(4);
+  temperatureChar.begin();
+  temperatureChar.write((uint8_t*)&temperature, 4);
+
   // Minimum connection interval for lowest latency
   Bluefruit.Periph.setConnInterval(6, 12);
 
@@ -174,13 +185,23 @@ void loop() {
     }
   }
 
+  // Temperature read every 5 seconds
+  if (now - lastTemperature >= 5000) {
+    lastTemperature = now;
+    temperature = myIMU.readTempC();
+    if (Bluefruit.connected()) {
+      temperatureChar.notify((uint8_t*)&temperature, 4);
+    }
+  }
+
   // Serial debug at 5Hz
   if (now - lastSerial >= 200) {
     lastSerial = now;
     Serial.print("R:"); Serial.print(roll, 1);
     Serial.print(" P:"); Serial.print(pitch, 1);
     Serial.print(" Y:"); Serial.print(yaw, 1);
-    Serial.print(" BAT:"); Serial.print(batteryPercent); Serial.println("%");
+    Serial.print(" BAT:"); Serial.print(batteryPercent);
+    Serial.print("% TEMP:"); Serial.print(temperature, 1); Serial.println("C");
   }
 }
 
