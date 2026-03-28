@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -970,6 +969,24 @@ fun SettingsScreen(
     var showKey by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    var serverEnrolledName by remember { mutableStateOf<String?>(null) }
+    var serverCheckDone by remember { mutableStateOf(false) }
+
+    // Query server for enrolled speakers on load
+    LaunchedEffect(serverUrl, useLocalServer) {
+        if (useLocalServer) {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val name = voiceProfileManager.checkServerEnrollment(serverUrl)
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    serverEnrolledName = name
+                    serverCheckDone = true
+                    onEnrollmentChanged(name != null)
+                }
+            }
+        } else {
+            serverCheckDone = true
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -1100,14 +1117,37 @@ fun SettingsScreen(
         )
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Status
-        val enrolledName = voiceProfileManager.enrolledName
-        Text(
-            text = if (isVoiceEnrolled && enrolledName != null) "Enrolled as \"$enrolledName\"" else "Not enrolled",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (isVoiceEnrolled) Color(0xFF00CC88) else Color(0xFF888888)
-        )
+        // Status — prefer server-checked name, fall back to local
+        val displayName = serverEnrolledName ?: voiceProfileManager.enrolledName
+        val effectiveEnrolled = if (serverCheckDone) (serverEnrolledName != null) else isVoiceEnrolled
+
+        if (!serverCheckDone && useLocalServer) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    color = Color(0xFFFF4444),
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Checking server...", fontSize = 14.sp, color = Color(0xFF888888))
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(if (effectiveEnrolled) Color(0xFF00CC88) else Color(0xFF555555))
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (effectiveEnrolled && displayName != null) "Enrolled as \"$displayName\"" else "Not enrolled",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (effectiveEnrolled) Color(0xFF00CC88) else Color(0xFF888888)
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -1172,9 +1212,20 @@ private val ENROLLMENT_PHRASES = listOf(
     "Technology keeps getting better and more accessible"
 )
 
-private const val PHRASE_DURATION_MS = 5000L
+private const val PHRASE_TIMEOUT_MS = 15000L
 
-enum class EnrollStep { INTRO, RECORDING, PROCESSING, COMPLETE, ERROR }
+enum class EnrollStep { INTRO, LISTENING, MATCHED, PROCESSING, COMPLETE, ERROR }
+
+/**
+ * Fuzzy match: checks if 60%+ of target words appear in the spoken text.
+ */
+private fun phrasesMatch(spoken: String, target: String): Boolean {
+    val spokenWords = spoken.lowercase().split("\\s+".toRegex()).filter { it.isNotBlank() }
+    val targetWords = target.lowercase().split("\\s+".toRegex()).filter { it.isNotBlank() }
+    if (targetWords.isEmpty()) return false
+    val matchCount = targetWords.count { it in spokenWords }
+    return matchCount.toFloat() / targetWords.size >= 0.6f
+}
 
 @Composable
 fun VoiceEnrollmentScreen(
@@ -1188,12 +1239,27 @@ fun VoiceEnrollmentScreen(
     var step by remember { mutableStateOf(EnrollStep.INTRO) }
     var currentPhraseIndex by remember { mutableIntStateOf(0) }
     var speakerName by remember { mutableStateOf(voiceProfileManager.enrolledName ?: "You") }
-    var recordingProgress by remember { mutableFloatStateOf(0f) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var heardText by remember { mutableStateOf("") }
+    var timedOut by remember { mutableStateOf(false) }
+    // Key to force-restart LaunchedEffects on retry
+    var listenKey by remember { mutableIntStateOf(0) }
     val pcmChunks = remember { mutableListOf<ByteArray>() }
     val scope = rememberCoroutineScope()
 
-    // Pulse animation for recording indicator
+    // Dedicated WS client for enrollment transcription
+    val enrollWsClient = remember { LocalServerClient(serverUrl) }
+    val enrollSegments by enrollWsClient.segments.collectAsState()
+    val enrollPartial by enrollWsClient.partialText.collectAsState()
+    val enrollConnected by enrollWsClient.isConnected.collectAsState()
+
+    DisposableEffect(Unit) {
+        onDispose {
+            enrollWsClient.destroy()
+        }
+    }
+
+    // Pulse animation for listening indicator
     val infiniteTransition = rememberInfiniteTransition(label = "enrollPulse")
     val pulseAlpha by infiniteTransition.animateFloat(
         initialValue = 0.3f,
@@ -1205,33 +1271,70 @@ fun VoiceEnrollmentScreen(
         label = "pulseAlpha"
     )
 
-    // Recording logic: when step is RECORDING, collect BLE audio for each phrase
-    LaunchedEffect(step, currentPhraseIndex) {
-        if (step == EnrollStep.RECORDING) {
-            recordingProgress = 0f
-            // Start collecting from BLE
-            voiceProfileManager.startCollecting(bleManager.audioFrames, scope)
+    // Build accumulated transcription text from segments + partial
+    val accumulatedText = remember(enrollSegments, enrollPartial) {
+        val segText = enrollSegments.joinToString(" ") { it.text }
+        if (enrollPartial.isNotBlank()) "$segText $enrollPartial".trim() else segText.trim()
+    }
 
-            // Count down for PHRASE_DURATION_MS
-            val startTime = System.currentTimeMillis()
-            while (System.currentTimeMillis() - startTime < PHRASE_DURATION_MS) {
-                val elapsed = System.currentTimeMillis() - startTime
-                recordingProgress = (elapsed.toFloat() / PHRASE_DURATION_MS).coerceIn(0f, 1f)
-                kotlinx.coroutines.delay(50)
+    // Update heardText display
+    LaunchedEffect(accumulatedText) {
+        if (step == EnrollStep.LISTENING && !timedOut) {
+            heardText = accumulatedText
+        }
+    }
+
+    // Check for phrase match whenever accumulated text changes
+    LaunchedEffect(accumulatedText, step, currentPhraseIndex) {
+        if (step == EnrollStep.LISTENING && !timedOut && accumulatedText.isNotBlank()) {
+            val targetPhrase = ENROLLMENT_PHRASES[currentPhraseIndex].replace("%s", speakerName)
+            if (phrasesMatch(accumulatedText, targetPhrase)) {
+                // Match! Stop collecting, save chunk
+                val chunk = voiceProfileManager.stopCollecting()
+                pcmChunks.add(chunk)
+                enrollWsClient.stop()
+                step = EnrollStep.MATCHED
             }
-            recordingProgress = 1f
+        }
+    }
 
-            // Stop and save chunk
-            val chunk = voiceProfileManager.stopCollecting()
-            pcmChunks.add(chunk)
+    // Feed BLE audio to enrollment WS when listening
+    LaunchedEffect(step, listenKey) {
+        if (step == EnrollStep.LISTENING) {
+            bleManager.audioFrames.collect { frame ->
+                if (step == EnrollStep.LISTENING) {
+                    enrollWsClient.feedAudio(frame)
+                }
+            }
+        }
+    }
 
-            // Next phrase or process
+    // Timeout: if no match after PHRASE_TIMEOUT_MS
+    LaunchedEffect(step, currentPhraseIndex, listenKey) {
+        if (step == EnrollStep.LISTENING) {
+            timedOut = false
+            kotlinx.coroutines.delay(PHRASE_TIMEOUT_MS)
+            if (step == EnrollStep.LISTENING) {
+                voiceProfileManager.stopCollecting()
+                enrollWsClient.stop()
+                timedOut = true
+            }
+        }
+    }
+
+    // Auto-advance after showing checkmark
+    LaunchedEffect(step, currentPhraseIndex) {
+        if (step == EnrollStep.MATCHED) {
+            kotlinx.coroutines.delay(800)
             if (currentPhraseIndex < ENROLLMENT_PHRASES.size - 1) {
                 currentPhraseIndex++
-                // Small pause between phrases
-                kotlinx.coroutines.delay(500)
+                heardText = ""
+                timedOut = false
+                enrollWsClient.clear()
+                enrollWsClient.start()
+                voiceProfileManager.startCollecting(bleManager.audioFrames, scope)
+                step = EnrollStep.LISTENING
             } else {
-                // All phrases done, process
                 step = EnrollStep.PROCESSING
             }
         }
@@ -1276,14 +1379,18 @@ fun VoiceEnrollmentScreen(
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (step == EnrollStep.INTRO || step == EnrollStep.COMPLETE || step == EnrollStep.ERROR) {
-                IconButton(onClick = onBack) {
+            if (step == EnrollStep.INTRO || step == EnrollStep.COMPLETE || step == EnrollStep.ERROR || timedOut) {
+                IconButton(onClick = {
+                    enrollWsClient.stop()
+                    try { voiceProfileManager.stopCollecting() } catch (_: Exception) {}
+                    onBack()
+                }) {
                     Text("\u2190", fontSize = 24.sp, color = Color.White)
                 }
             }
             Spacer(modifier = Modifier.weight(1f))
             // Progress dots
-            if (step == EnrollStep.RECORDING) {
+            if (step == EnrollStep.LISTENING || step == EnrollStep.MATCHED) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (i in ENROLLMENT_PHRASES.indices) {
                         Box(
@@ -1292,6 +1399,7 @@ fun VoiceEnrollmentScreen(
                                 .clip(CircleShape)
                                 .background(
                                     if (i < currentPhraseIndex) Color(0xFF00CC88)
+                                    else if (i == currentPhraseIndex && step == EnrollStep.MATCHED) Color(0xFF00CC88)
                                     else if (i == currentPhraseIndex) Color(0xFFFF4444)
                                     else Color(0xFF333333)
                                 )
@@ -1321,7 +1429,7 @@ fun VoiceEnrollmentScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "You'll read 5 short phrases aloud.",
+                    "You'll read 5 short phrases aloud. Each one is verified before moving on.",
                     fontSize = 16.sp,
                     color = Color(0xFF999999),
                     lineHeight = 24.sp
@@ -1353,7 +1461,12 @@ fun VoiceEnrollmentScreen(
                         if (speakerName.isBlank()) speakerName = "You"
                         pcmChunks.clear()
                         currentPhraseIndex = 0
-                        step = EnrollStep.RECORDING
+                        heardText = ""
+                        timedOut = false
+                        enrollWsClient.clear()
+                        enrollWsClient.start()
+                        voiceProfileManager.startCollecting(bleManager.audioFrames, scope)
+                        step = EnrollStep.LISTENING
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1383,77 +1496,176 @@ fun VoiceEnrollmentScreen(
                 }
             }
 
-            EnrollStep.RECORDING -> {
-                // Recording indicator
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFFF4444).copy(alpha = pulseAlpha))
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+            EnrollStep.LISTENING -> {
+                if (timedOut) {
+                    // Timeout — didn't catch the phrase
                     Text(
-                        "Recording...",
-                        fontSize = 14.sp,
-                        color = Color(0xFFFF4444).copy(alpha = pulseAlpha)
+                        "Didn't catch that",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFFAA00)
                     )
-                }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Phrase ${currentPhraseIndex + 1} of ${ENROLLMENT_PHRASES.size}",
+                        fontSize = 14.sp,
+                        color = Color(0xFF666666)
+                    )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
 
-                Text(
-                    "Phrase ${currentPhraseIndex + 1} of ${ENROLLMENT_PHRASES.size}",
-                    fontSize = 14.sp,
-                    color = Color(0xFF666666)
-                )
-
-                Spacer(modifier = Modifier.height(32.dp))
-
-                // The phrase
-                val phrase = ENROLLMENT_PHRASES[currentPhraseIndex].replace("%s", speakerName)
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
+                    val phrase = ENROLLMENT_PHRASES[currentPhraseIndex].replace("%s", speakerName)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "\"$phrase\"",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.White,
+                                lineHeight = 32.sp,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+
+                    if (heardText.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "\"$phrase\"",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color.White,
-                            lineHeight = 32.sp,
-                            modifier = Modifier.fillMaxWidth()
+                            "Heard: $heardText",
+                            fontSize = 14.sp,
+                            color = Color(0xFF888888),
+                            fontStyle = FontStyle.Italic
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Button(
+                        onClick = {
+                            heardText = ""
+                            timedOut = false
+                            listenKey++
+                            enrollWsClient.clear()
+                            enrollWsClient.start()
+                            voiceProfileManager.startCollecting(bleManager.audioFrames, scope)
+                            // step stays LISTENING, listenKey change restarts effects
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFFF4444)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Try Again", fontSize = 16.sp, color = Color.White)
+                    }
+                } else {
+                    // Active listening
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFF4444).copy(alpha = pulseAlpha))
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Listening...",
+                            fontSize = 14.sp,
+                            color = Color(0xFFFF4444).copy(alpha = pulseAlpha)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        "Phrase ${currentPhraseIndex + 1} of ${ENROLLMENT_PHRASES.size}",
+                        fontSize = 14.sp,
+                        color = Color(0xFF666666)
+                    )
+
+                    Spacer(modifier = Modifier.height(32.dp))
+
+                    // The phrase to say
+                    val phrase = ENROLLMENT_PHRASES[currentPhraseIndex].replace("%s", speakerName)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "\"$phrase\"",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.White,
+                                lineHeight = 32.sp,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Live feedback
+                    if (heardText.isNotBlank()) {
+                        Text(
+                            "Heard: $heardText",
+                            fontSize = 14.sp,
+                            color = Color(0xFF888888),
+                            fontStyle = FontStyle.Italic,
+                            lineHeight = 20.sp
+                        )
+                    } else if (enrollConnected) {
+                        Text(
+                            "Say the phrase above...",
+                            fontSize = 14.sp,
+                            color = Color(0xFF555555)
+                        )
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = Color(0xFFFF4444),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Connecting to server...",
+                                fontSize = 14.sp,
+                                color = Color(0xFF555555)
+                            )
+                        }
+                    }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Progress bar
-                LinearProgressIndicator(
-                    progress = { recordingProgress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp)),
-                    color = Color(0xFFFF4444),
-                    trackColor = Color(0xFF333333),
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                val secondsLeft = ((1f - recordingProgress) * (PHRASE_DURATION_MS / 1000f)).toInt()
+            EnrollStep.MATCHED -> {
                 Text(
-                    "${secondsLeft}s remaining",
-                    fontSize = 13.sp,
-                    color = Color(0xFF666666)
+                    "✓",
+                    fontSize = 64.sp,
+                    color = Color(0xFF00CC88)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    "Phrase ${currentPhraseIndex + 1} matched!",
+                    fontSize = 18.sp,
+                    color = Color(0xFF00CC88)
                 )
             }
 
@@ -1471,13 +1683,19 @@ fun VoiceEnrollmentScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "This may take a few seconds",
+                    "This may take a moment",
                     fontSize = 14.sp,
                     color = Color(0xFF666666)
                 )
             }
 
             EnrollStep.COMPLETE -> {
+                Text(
+                    "✓",
+                    fontSize = 48.sp,
+                    color = Color(0xFF00CC88)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     "Voice profile created!",
                     fontSize = 28.sp,
@@ -1533,6 +1751,8 @@ fun VoiceEnrollmentScreen(
                         pcmChunks.clear()
                         currentPhraseIndex = 0
                         errorMessage = null
+                        heardText = ""
+                        timedOut = false
                         step = EnrollStep.INTRO
                     },
                     modifier = Modifier

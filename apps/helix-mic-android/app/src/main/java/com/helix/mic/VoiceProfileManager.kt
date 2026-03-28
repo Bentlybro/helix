@@ -29,9 +29,9 @@ class VoiceProfileManager(private val context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
     // Enrollment audio collection
@@ -125,6 +125,43 @@ class VoiceProfileManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Enrollment network error", e)
             EnrollResult(false, e.message ?: "Network error")
+        }
+    }
+
+    /**
+     * Check the server for enrolled speakers. Returns the first enrolled speaker name, or null.
+     */
+    fun checkServerEnrollment(serverWsUrl: String): String? {
+        val httpBase = wsUrlToHttpBase(serverWsUrl)
+        return try {
+            val request = Request.Builder()
+                .url("$httpBase/api/speakers")
+                .get()
+                .build()
+            val response = httpClient.newCall(request).execute()
+            val body = response.body?.string() ?: "[]"
+            if (response.isSuccessful) {
+                val arr = org.json.JSONArray(body)
+                if (arr.length() > 0) {
+                    val name = arr.getString(0)
+                    // Sync local state
+                    saveProfile(name)
+                    name
+                } else {
+                    // No speakers on server — clear local state
+                    prefs.edit()
+                        .remove(KEY_ENROLLED_NAME)
+                        .putBoolean(KEY_IS_ENROLLED, false)
+                        .apply()
+                    null
+                }
+            } else {
+                Log.w(TAG, "Failed to check speakers: ${response.code}")
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to check server enrollment: ${e.message}")
+            null
         }
     }
 
