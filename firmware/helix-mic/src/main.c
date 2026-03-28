@@ -146,30 +146,36 @@ int main(void)
     return 0;
 }
 
+/* Max PCM bytes per BLE packet (MTU 247 - 3 ATT - 3 header = 241, round to 240) */
+#define BLE_AUDIO_CHUNK_BYTES 240
+
+static uint16_t audio_seq = 0;
+
 static void audio_frame_handler(int16_t *buf, size_t num_samples)
 {
-    struct encoded_frame encoded;
-    int ret;
-    
     if (!transport_is_connected()) {
         return;
     }
     
-    /* Signal LED that audio is active */
     led_notify_audio();
     
-    /* Encode frame (currently PCM passthrough) */
-    ret = codec_encode(buf, num_samples, &encoded);
-    if (ret < 0) {
-        LOG_WRN("Encode failed");
-        return;
-    }
+    /* Send PCM in BLE-sized chunks */
+    const uint8_t *pcm = (const uint8_t *)buf;
+    size_t total_bytes = num_samples * sizeof(int16_t);
+    size_t offset = 0;
     
-    /* Send over BLE */
-    ret = transport_send_audio(encoded.data, encoded.len, 
-                               encoded.seq_num, encoded.flags);
-    if (ret < 0) {
-        LOG_DBG("Send failed: %d", ret);
+    while (offset < total_bytes) {
+        size_t chunk = total_bytes - offset;
+        if (chunk > BLE_AUDIO_CHUNK_BYTES) {
+            chunk = BLE_AUDIO_CHUNK_BYTES;
+        }
+        
+        int ret = transport_send_audio(pcm + offset, chunk, audio_seq++, 0x01);
+        if (ret < 0) {
+            LOG_DBG("Send failed at offset %zu: %d", offset, ret);
+            break;
+        }
+        offset += chunk;
     }
 }
 
