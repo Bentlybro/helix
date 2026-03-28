@@ -70,11 +70,11 @@ async def main():
         except asyncio.TimeoutError:
             pass  # Normal — recording finished
         
-        if not disconnected.is_set():
-            try:
+        try:
+            if client.is_connected:
                 await client.stop_notify(AUDIO_UUID)
-            except Exception:
-                pass
+        except Exception:
+            pass
         print(f"\nDone! Received {len(packets)} packets, {total_bytes} bytes")
     
     if not packets:
