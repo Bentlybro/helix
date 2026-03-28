@@ -56,6 +56,7 @@ fun HelixIMUApp(bleManager: HelixBleManager) {
     val deviceAddress by bleManager.deviceAddress.collectAsState()
     val log by bleManager.log.collectAsState()
     val isCalibrated by bleManager.isCalibrated.collectAsState()
+    val batteryPercent by bleManager.batteryPercent.collectAsState()
 
     val blePermissions = rememberMultiplePermissionsState(
         permissions = listOf(
@@ -90,7 +91,13 @@ fun HelixIMUApp(bleManager: HelixBleManager) {
                 ) {
                     Text("Helix IMU", fontSize = 28.sp, fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary)
-                    StatusDot(connectionState)
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (batteryPercent != null) {
+                            BatteryIndicator(batteryPercent!!)
+                        }
+                        StatusDot(connectionState)
+                    }
                 }
                 Text(
                     text = when (connectionState) {
@@ -292,6 +299,47 @@ fun DrawScope.drawArrow(start: Offset, end: Offset, color: Color, strokeWidth: F
         close()
     }
     drawPath(path, color)
+}
+
+@Composable
+fun BatteryIndicator(percent: Int) {
+    val color = when {
+        percent > 50 -> Color(0xFF00FF88)
+        percent > 20 -> Color(0xFFFFAA00)
+        else -> Color(0xFFFF4444)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("$percent%", fontSize = 12.sp, color = color, fontWeight = FontWeight.Medium)
+        // Battery icon drawn via canvas
+        Canvas(modifier = Modifier.size(20.dp, 12.dp)) {
+            val w = size.width
+            val h = size.height
+            val tipW = 3f
+            val bodyW = w - tipW
+            // Body outline
+            drawRoundRect(
+                color = color,
+                size = androidx.compose.ui.geometry.Size(bodyW, h),
+                style = Stroke(1.5f)
+            )
+            // Tip
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(bodyW, h * 0.25f),
+                size = androidx.compose.ui.geometry.Size(tipW, h * 0.5f)
+            )
+            // Fill
+            val fillW = (bodyW - 4f) * (percent / 100f)
+            if (fillW > 0f) {
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(2f, 2f),
+                    size = androidx.compose.ui.geometry.Size(fillW, h - 4f)
+                )
+            }
+        }
+    }
 }
 
 @Composable

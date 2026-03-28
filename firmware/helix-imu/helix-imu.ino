@@ -1,5 +1,5 @@
 /*
- * Helix Firmware
+ * Helix Firmware — helix-imu
  * XIAO nRF52840 Sense - BLE IMU Streamer
  * 
  * Uses Bluefruit BLE stack (built into Seeed nRF52 Boards package)
@@ -15,22 +15,32 @@
 #include "LSM6DS3.h"
 #include "Wire.h"
 
-// BLE UUIDs - single packed characteristic (roll, pitch, yaw as 3 floats = 12 bytes)
+// BLE UUIDs
 #define SERVICE_UUID      "917649A0-D98E-11E5-9EEC-0002A5D5C51B"
 #define ORIENTATION_UUID  "917649A1-D98E-11E5-9EEC-0002A5D5C51B"
+#define BATTERY_UUID      "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
+
+// Battery pins (XIAO nRF52840)
+#define BAT_READ_PIN   P0_31   // ADC pin for battery voltage
+#define BAT_ENABLE_PIN P0_14   // Pull LOW to enable battery read circuit
 
 // IMU
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
 
-// BLE - single characteristic with all 3 values packed
-BLEService        headTrackerService  = BLEService(SERVICE_UUID);
-BLECharacteristic orientationChar     = BLECharacteristic(ORIENTATION_UUID);
+// BLE
+BLEService        helixService    = BLEService(SERVICE_UUID);
+BLECharacteristic orientationChar = BLECharacteristic(ORIENTATION_UUID);
+BLECharacteristic batteryChar     = BLECharacteristic(BATTERY_UUID);
 
 // Sensor fusion state
 float roll = 0.0, pitch = 0.0, yaw = 0.0;
-unsigned long lastUpdate = 0;
-unsigned long lastSerial = 0;
+unsigned long lastUpdate  = 0;
+unsigned long lastSerial  = 0;
+unsigned long lastBattery = 0;
 const float alpha = 0.98;
+
+// Battery state
+uint8_t batteryPercent = 0;
 
 void blink(int times, int ms = 200) {
   for (int i = 0; i < times; i++) {
@@ -52,9 +62,37 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
   Bluefruit.Advertising.start(0);
 }
 
+uint8_t readBatteryPercent() {
+  // Enable the battery read circuit
+  pinMode(BAT_ENABLE_PIN, OUTPUT);
+  digitalWrite(BAT_ENABLE_PIN, LOW);
+  delay(1); // Let it settle
+
+  // Read ADC — 12-bit, 3.6V reference
+  analogReadResolution(12);
+  int raw = analogRead(BAT_READ_PIN);
+
+  // Disable to save power
+  digitalWrite(BAT_ENABLE_PIN, HIGH);
+
+  // Convert: voltage divider is 1/2, reference is 3.6V
+  // voltage = raw * (3.6 / 4096) * 2
+  float voltage = raw * (3.6f / 4096.0f) * 2.0f;
+
+  // Map 3.0V (0%) to 4.2V (100%)
+  float percent = (voltage - 3.0f) / (4.2f - 3.0f) * 100.0f;
+  percent = constrain(percent, 0.0f, 100.0f);
+
+  return (uint8_t)percent;
+}
+
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
+
+  // Disable battery read circuit by default (saves power)
+  pinMode(BAT_ENABLE_PIN, OUTPUT);
+  digitalWrite(BAT_ENABLE_PIN, HIGH);
 
   Serial.begin(115200);
   unsigned long t = millis();
@@ -72,6 +110,10 @@ void setup() {
   Serial.println("IMU OK");
   blink(1);
 
+  // Initial battery read
+  batteryPercent = readBatteryPercent();
+  Serial.print("Battery: "); Serial.print(batteryPercent); Serial.println("%");
+
   // Init BLE
   Bluefruit.begin();
   Bluefruit.setTxPower(4);
@@ -79,19 +121,27 @@ void setup() {
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
 
-  // Single packed orientation characteristic (12 bytes: roll, pitch, yaw)
-  headTrackerService.begin();
+  helixService.begin();
+
+  // Orientation: 12 bytes (roll, pitch, yaw as float32)
   orientationChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
   orientationChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
   orientationChar.setFixedLen(12);
   orientationChar.begin();
 
+  // Battery: 1 byte (0-100%)
+  batteryChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  batteryChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  batteryChar.setFixedLen(1);
+  batteryChar.begin();
+  batteryChar.write8(batteryPercent);
+
   // Minimum connection interval for lowest latency
-  Bluefruit.Periph.setConnInterval(6, 12); // 7.5ms - 15ms
+  Bluefruit.Periph.setConnInterval(6, 12);
 
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
-  Bluefruit.Advertising.addService(headTrackerService);
+  Bluefruit.Advertising.addService(helixService);
   Bluefruit.ScanResponse.addName();
   Bluefruit.Advertising.restartOnDisconnect(true);
   Bluefruit.Advertising.setInterval(32, 244);
@@ -105,23 +155,32 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // IMU + BLE at 100Hz (every 10ms)
+  // IMU + BLE at 100Hz
   if (now - lastUpdate >= 10) {
-    float dt = (now - lastUpdate) / 1000.0f; // real elapsed time in seconds
+    float dt = (now - lastUpdate) / 1000.0f;
     lastUpdate = now;
     updateOrientation(dt);
-
     if (Bluefruit.connected()) {
       sendBleData();
     }
   }
 
-  // Serial debug at 5Hz (every 200ms)
+  // Battery read every 30 seconds
+  if (now - lastBattery >= 30000) {
+    lastBattery = now;
+    batteryPercent = readBatteryPercent();
+    if (Bluefruit.connected()) {
+      batteryChar.notify8(batteryPercent);
+    }
+  }
+
+  // Serial debug at 5Hz
   if (now - lastSerial >= 200) {
     lastSerial = now;
     Serial.print("R:"); Serial.print(roll, 1);
     Serial.print(" P:"); Serial.print(pitch, 1);
-    Serial.print(" Y:"); Serial.println(yaw, 1);
+    Serial.print(" Y:"); Serial.print(yaw, 1);
+    Serial.print(" BAT:"); Serial.print(batteryPercent); Serial.println("%");
   }
 }
 
@@ -133,22 +192,18 @@ void updateOrientation(float dt) {
   float gyroY  = myIMU.readFloatGyroY();
   float gyroZ  = myIMU.readFloatGyroZ();
 
-  // Accel angles in degrees
   float rollAccel  = atan2(accelY, accelZ) * RAD_TO_DEG;
   float pitchAccel = atan2(-accelX, sqrt(accelY * accelY + accelZ * accelZ)) * RAD_TO_DEG;
 
-  // Integrate gyro for yaw (deg/s * s = deg)
   yaw += gyroZ * dt;
   if (yaw >  180.0) yaw -= 360.0;
   if (yaw < -180.0) yaw += 360.0;
 
-  // Complementary filter — everything in degrees
   roll  = alpha * (roll  + gyroX * dt) + (1.0 - alpha) * rollAccel;
   pitch = alpha * (pitch + gyroY * dt) + (1.0 - alpha) * pitchAccel;
 }
 
 void sendBleData() {
-  // Pack roll, pitch, yaw as 3 floats (12 bytes) — single atomic notify
   float data[3] = { roll, pitch, yaw };
   orientationChar.notify((uint8_t*)data, 12);
 }

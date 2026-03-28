@@ -16,6 +16,7 @@ import java.util.UUID
 
 val SERVICE_UUID: UUID = UUID.fromString("917649A0-D98E-11E5-9EEC-0002A5D5C51B")
 val ORIENTATION_UUID: UUID = UUID.fromString("917649A1-D98E-11E5-9EEC-0002A5D5C51B")
+val BATTERY_UUID: UUID = UUID.fromString("917649A2-D98E-11E5-9EEC-0002A5D5C51B")
 val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
 data class Orientation(
@@ -48,6 +49,9 @@ class HelixBleManager(private val context: Context) {
     private val _log = MutableStateFlow<List<Orientation>>(emptyList())
     val log: StateFlow<List<Orientation>> = _log
 
+    private val _batteryPercent = MutableStateFlow<Int?>(null)
+    val batteryPercent: StateFlow<Int?> = _batteryPercent
+
     // Calibration offset — subtracted from every reading
     private var calibrationOffset = Orientation()
     private val _isCalibrated = MutableStateFlow(false)
@@ -75,24 +79,44 @@ class HelixBleManager(private val context: Context) {
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            val characteristic = gatt
-                .getService(SERVICE_UUID)
-                ?.getCharacteristic(ORIENTATION_UUID) ?: return
-            gatt.setCharacteristicNotification(characteristic, true)
-            val descriptor = characteristic.getDescriptor(CCCD_UUID)
-            descriptor?.let {
-                it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                gatt.writeDescriptor(it)
+            val service = gatt.getService(SERVICE_UUID) ?: return
+
+            // Subscribe to orientation
+            service.getCharacteristic(ORIENTATION_UUID)?.let { char ->
+                gatt.setCharacteristicNotification(char, true)
+                char.getDescriptor(CCCD_UUID)?.let {
+                    it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    gatt.writeDescriptor(it)
+                }
             }
+
+            // Read initial battery value
+            service.getCharacteristic(BATTERY_UUID)?.let { char ->
+                gatt.setCharacteristicNotification(char, true)
+                gatt.readCharacteristic(char)
+            }
+
             _connectionState.value = ConnectionState.CONNECTED
+        }
+
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            if (characteristic.uuid == BATTERY_UUID && status == BluetoothGatt.GATT_SUCCESS) {
+                _batteryPercent.value = characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+            }
         }
 
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
-            if (characteristic.uuid == ORIENTATION_UUID) {
-                parseOrientation(characteristic.value)
+            when (characteristic.uuid) {
+                ORIENTATION_UUID -> parseOrientation(characteristic.value)
+                BATTERY_UUID -> _batteryPercent.value =
+                    characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
             }
         }
     }
