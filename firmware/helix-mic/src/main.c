@@ -52,8 +52,12 @@ static struct adc_channel_cfg adc_cfg = {
 /* Forward declarations */
 static void audio_frame_handler(struct audio_frame *frame);
 static void connection_changed(bool connected);
+static void on_connect_start_mic(void);
 static int init_battery_adc(void);
 static uint8_t read_battery_level(void);
+
+/* Track mic state for fallback start */
+static volatile bool mic_running = false;
 
 /* Main thread */
 int main(void)
@@ -89,6 +93,7 @@ int main(void)
     /* Set callbacks */
     mic_set_frame_callback(audio_frame_handler);
     transport_set_conn_callback(connection_changed);
+    transport_set_mic_start(on_connect_start_mic);
     
     /* Start BLE advertising */
     ret = transport_start_advertising();
@@ -102,6 +107,12 @@ int main(void)
     /* Main loop - monitor battery and handle state */
     while (1) {
         if (transport_is_connected()) {
+            /* Fallback: if connected but mic not running, start it */
+            if (!mic_running) {
+                LOG_WRN("Mic not running on connect - starting now (fallback)");
+                on_connect_start_mic();
+            }
+            
             /* Update battery level periodically */
             uint8_t level = read_battery_level();
             transport_update_battery(level);
@@ -138,23 +149,34 @@ static void audio_frame_handler(struct audio_frame *frame)
     }
 }
 
-static void connection_changed(bool connected)
+static void on_connect_start_mic(void)
 {
     int ret;
     
-    if (connected) {
-        LOG_INF("Client connected - starting audio stream");
-        ret = mic_start();
-        if (ret < 0) {
-            LOG_ERR("Failed to start mic: %d", ret);
-        }
+    if (mic_running) {
+        return;  /* Already running */
+    }
+    
+    LOG_INF("Starting audio stream");
+    ret = mic_start();
+    if (ret < 0) {
+        LOG_ERR("Failed to start mic: %d", ret);
     } else {
+        mic_running = true;
+    }
+}
+
+static void connection_changed(bool connected)
+{
+    if (!connected) {
         LOG_INF("Client disconnected - stopping audio stream");
-        ret = mic_stop();
+        int ret = mic_stop();
         if (ret < 0) {
             LOG_ERR("Failed to stop mic: %d", ret);
         }
+        mic_running = false;
     }
+    /* Note: mic start is handled by transport's direct call or fallback in main loop */
 }
 
 static int init_battery_adc(void)

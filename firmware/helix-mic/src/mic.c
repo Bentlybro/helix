@@ -8,7 +8,16 @@ LOG_MODULE_REGISTER(mic, CONFIG_LOG_DEFAULT_LEVEL);
 #include "mic.h"
 #include <zephyr/drivers/gpio.h>
 
-#define DMIC_DEV     DT_NODELABEL(pdm0)
+/* Try DT_ALIAS first, fallback to node labels */
+#if DT_NODE_EXISTS(DT_ALIAS(dmic_dev))
+#define DMIC_DEV DT_ALIAS(dmic_dev)
+#elif DT_NODE_EXISTS(DT_NODELABEL(dmic0))
+#define DMIC_DEV DT_NODELABEL(dmic0)
+#elif DT_NODE_EXISTS(DT_NODELABEL(pdm0))
+#define DMIC_DEV DT_NODELABEL(pdm0)
+#else
+#error "No DMIC/PDM device found in device tree"
+#endif
 #define BUF_COUNT    4
 #define STREAM_ID    0
 

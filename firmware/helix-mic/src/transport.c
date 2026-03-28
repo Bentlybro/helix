@@ -14,9 +14,12 @@ static struct bt_conn *current_conn;
 static volatile bool is_connected = false;
 static transport_conn_cb_t conn_callback = NULL;
 
-/* Notification data */
-static uint8_t audio_data[128];
+/* Notification data - 700 bytes to hold 20ms PCM frame (640 bytes) + header */
+static uint8_t audio_data[700];
 static uint8_t battery_level = 100;
+
+/* Mic start function pointer for direct call on connect */
+static void (*mic_start_fn)(void) = NULL;
 
 /* Define UUIDs using BT_UUID_128_ENCODE macro */
 #define HELIX_SVC_UUID_VAL \
@@ -91,6 +94,11 @@ static void connected(struct bt_conn *conn, uint8_t err)
     is_connected = true;
     
     LOG_INF("Connected");
+    
+    /* Start mic directly instead of relying on callback */
+    if (mic_start_fn) {
+        mic_start_fn();
+    }
     
     if (conn_callback) {
         conn_callback(true);
@@ -186,4 +194,9 @@ bool transport_is_connected(void)
 void transport_set_conn_callback(transport_conn_cb_t cb)
 {
     conn_callback = cb;
+}
+
+void transport_set_mic_start(void (*fn)(void))
+{
+    mic_start_fn = fn;
 }

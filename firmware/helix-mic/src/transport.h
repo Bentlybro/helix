@@ -28,4 +28,7 @@ bool transport_is_connected(void);
 typedef void (*transport_conn_cb_t)(bool connected);
 void transport_set_conn_callback(transport_conn_cb_t cb);
 
+/* Set mic start function (called directly on connect) */
+void transport_set_mic_start(void (*fn)(void));
+
 #endif /* TRANSPORT_H */

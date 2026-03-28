@@ -1,5 +1,12 @@
 /* XIAO nRF52840 Sense Pin Definitions for Helix-Mic */
 
+/ {
+    /* Add alias for DMIC device for broader compatibility */
+    aliases {
+        dmic-dev = &pdm0;
+    };
+};
+
 /* Add pinctrl entries for PDM microphone */
 &pinctrl {
     pdm0_default: pdm0_default {
