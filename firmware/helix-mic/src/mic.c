@@ -57,18 +57,7 @@ static void mic_reader_entry(void *p1, void *p2, void *p3)
 
 		if (frame_callback && size > 0) {
 			size_t num_samples = size / BYTES_PER_SAMPLE;
-			int16_t *samples = (int16_t *)buffer;
-			
-			/* Apply software gain */
-			for (size_t i = 0; i < num_samples; i++) {
-				int32_t amp = (int32_t)samples[i] << SOFTWARE_GAIN_SHIFT;
-				/* Clamp to int16 range */
-				if (amp > 32767) amp = 32767;
-				if (amp < -32768) amp = -32768;
-				samples[i] = (int16_t)amp;
-			}
-			
-			frame_callback(samples, num_samples);
+			frame_callback((int16_t *)buffer, num_samples);
 		}
 
 		k_mem_slab_free(&mic_mem_slab, buffer);
@@ -116,7 +105,7 @@ int mic_start(void)
 		.channel = {
 			.req_num_streams = 1,
 			.req_num_chan = NUM_CHANNELS,
-			.req_chan_map_lo = dmic_build_channel_map(0, 0, PDM_CHAN_LEFT),
+			.req_chan_map_lo = dmic_build_channel_map(0, 0, PDM_CHAN_RIGHT),
 		},
 	};
 
