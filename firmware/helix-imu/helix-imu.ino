@@ -45,7 +45,7 @@ unsigned long lastUpdate     = 0;
 unsigned long lastSerial     = 0;
 unsigned long lastBattery    = 0;
 unsigned long lastTemperature = 0;
-const float alpha = 0.98;
+const float alpha = 0.95; // Lower = faster response, higher = smoother
 
 // Battery state
 uint8_t batteryPercent = 0;
@@ -173,8 +173,8 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // IMU + BLE at 100Hz
-  if (now - lastUpdate >= 10) {
+  // IMU + BLE at 200Hz
+  if (now - lastUpdate >= 5) {
     float dt = (now - lastUpdate) / 1000.0f;
     lastUpdate = now;
     updateOrientation(dt);

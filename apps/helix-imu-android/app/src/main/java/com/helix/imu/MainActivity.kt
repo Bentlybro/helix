@@ -226,7 +226,7 @@ fun HeadVisualiser(orientation: Orientation) {
 
                 // Forward arrow — pitch tilts up/down, roll sweeps left/right
                 val fwdX = cx + r * sin(rollRad)
-                val fwdY = cy - r * cos(rollRad) + r * 0.5f * sin(pitchRad)
+                val fwdY = cy - r * cos(rollRad) - r * 0.5f * sin(pitchRad)
 
                 drawArrow(
                     start = Offset(cx, cy),

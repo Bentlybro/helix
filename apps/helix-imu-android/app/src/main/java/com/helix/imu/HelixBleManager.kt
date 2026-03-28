@@ -101,6 +101,8 @@ class HelixBleManager(private val context: Context) {
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            // Request highest priority (7.5ms interval)
+            gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
             val service = gatt.getService(SERVICE_UUID) ?: return
 
             // Enable orientation notifications
