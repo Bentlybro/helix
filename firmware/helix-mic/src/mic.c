@@ -94,7 +94,7 @@ static void dmic_thread_fn(void *arg1, void *arg2, void *arg3)
     }
 }
 
-K_THREAD_STACK_DEFINE(dmic_stack, 1024);
+K_THREAD_STACK_DEFINE(dmic_stack, 4096);
 static struct k_thread dmic_thread;
 
 int mic_start(void)
