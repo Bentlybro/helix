@@ -1,8 +1,8 @@
 /*
- * Helix-Mic - PDM Microphone Capture using nrfx_pdm directly
+ * Helix-Mic - PDM Microphone Capture using Zephyr DMIC API
  *
- * Uses double-buffered nrfx_pdm with IRQ_DIRECT_CONNECT.
- * Based on proven nRF52840 PDM approach from BasedHardware/omi.
+ * Uses Zephyr's standard DMIC driver with k_mem_slab for buffer management.
+ * Mic enable (P1.10) is handled by device tree regulator-fixed with regulator-boot-on.
  */
 
 #include <zephyr/logging/log.h>
@@ -10,125 +10,152 @@ LOG_MODULE_REGISTER(mic, CONFIG_LOG_DEFAULT_LEVEL);
 
 #include "mic.h"
 
-#include <nrfx_pdm.h>
-#include <hal/nrf_clock.h>
-#include <hal/nrf_gpio.h>
-#include <zephyr/irq.h>
+#include <zephyr/audio/dmic.h>
 
-/* Double buffers for PDM DMA */
-static int16_t pdm_buf_0[SAMPLES_PER_FRAME];
-static int16_t pdm_buf_1[SAMPLES_PER_FRAME];
-static volatile uint8_t next_buf_idx = 0;
+/* Buffer management — DMIC driver allocates from this slab */
+#define BYTES_PER_SAMPLE  sizeof(int16_t)
+#define BLOCK_SIZE        (BYTES_PER_SAMPLE * SAMPLES_PER_FRAME * NUM_CHANNELS)
+#define BLOCK_COUNT       4
+K_MEM_SLAB_DEFINE_STATIC(mic_mem_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 
-static volatile mic_frame_cb_t frame_callback = NULL;
-static volatile bool pdm_running = false;
+/* Mic reader thread */
+#define MIC_THREAD_STACK_SIZE 2048
+#define MIC_THREAD_PRIORITY   K_PRIO_PREEMPT(5)
+K_THREAD_STACK_DEFINE(mic_thread_stack, MIC_THREAD_STACK_SIZE);
+static struct k_thread mic_thread_data;
 
-static void pdm_event_handler(nrfx_pdm_evt_t const *event)
+static const struct device *dmic;
+static volatile mic_frame_cb_t frame_callback;
+static volatile bool mic_running;
+
+/* Read timeout in ms */
+#define READ_TIMEOUT_MS 1000
+
+static void mic_reader_entry(void *p1, void *p2, void *p3)
 {
-    if (event->error) {
-        LOG_ERR("PDM error: %d", event->error);
-        return;
-    }
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
 
-    /* Provide next buffer to PDM DMA */
-    if (event->buffer_requested) {
-        if (next_buf_idx == 0) {
-            nrfx_pdm_buffer_set(pdm_buf_0, SAMPLES_PER_FRAME);
-            next_buf_idx = 1;
-        } else {
-            nrfx_pdm_buffer_set(pdm_buf_1, SAMPLES_PER_FRAME);
-            next_buf_idx = 0;
-        }
-    }
+	void *buffer;
+	uint32_t size;
+	int ret;
 
-    /* Deliver completed buffer to consumer */
-    if (event->buffer_released) {
-        if (frame_callback) {
-            frame_callback(event->buffer_released,
-                           SAMPLES_PER_FRAME);
-        }
-    }
+	LOG_INF("Mic reader thread started");
+
+	while (mic_running) {
+		ret = dmic_read(dmic, 0, &buffer, &size, READ_TIMEOUT_MS);
+		if (ret < 0) {
+			if (mic_running) {
+				LOG_ERR("dmic_read failed: %d", ret);
+			}
+			continue;
+		}
+
+		if (frame_callback && size > 0) {
+			size_t num_samples = size / BYTES_PER_SAMPLE;
+			frame_callback((int16_t *)buffer, num_samples);
+		}
+
+		k_mem_slab_free(&mic_mem_slab, buffer);
+	}
+
+	LOG_INF("Mic reader thread exiting");
 }
 
 int mic_init(void)
 {
-    LOG_INF("PDM microphone initialized (nrfx direct)");
-    return 0;
+	dmic = DEVICE_DT_GET(DT_NODELABEL(dmic_dev));
+	if (!device_is_ready(dmic)) {
+		LOG_ERR("DMIC device not ready");
+		return -ENODEV;
+	}
+
+	LOG_INF("DMIC device initialized (Zephyr DMIC API)");
+	return 0;
 }
 
 int mic_start(void)
 {
-    nrfx_err_t err;
+	int ret;
 
-    if (pdm_running) {
-        LOG_WRN("PDM already running");
-        return 0;
-    }
+	if (mic_running) {
+		LOG_WRN("Mic already running");
+		return 0;
+	}
 
-    /* Enable mic power — XIAO Sense has MSM261D3526HICPM-C with enable on P1.10 */
-    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 10));
-    nrf_gpio_pin_set(NRF_GPIO_PIN_MAP(1, 10));
-    LOG_INF("Mic power enabled (P1.10 HIGH)");
+	struct pcm_stream_cfg stream = {
+		.pcm_rate  = SAMPLE_RATE,
+		.pcm_width = SAMPLE_BITS,
+		.block_size = BLOCK_SIZE,
+		.mem_slab  = &mic_mem_slab,
+	};
 
-    /* Ensure HFCLK is running — required for PDM */
-    if (!nrf_clock_hf_is_running(NRF_CLOCK, NRF_CLOCK_HFCLK_HIGH_ACCURACY)) {
-        nrf_clock_task_trigger(NRF_CLOCK, NRF_CLOCK_TASK_HFCLKSTART);
-    }
+	struct dmic_cfg cfg = {
+		.io = {
+			.min_pdm_clk_freq = 1000000,
+			.max_pdm_clk_freq = 3500000,
+			.min_pdm_clk_dc   = 40,
+			.max_pdm_clk_dc   = 60,
+		},
+		.streams = &stream,
+		.channel = {
+			.req_num_streams = 1,
+			.req_num_chan = NUM_CHANNELS,
+			.req_chan_map_lo = dmic_build_channel_map(0, 0, PDM_CHAN_LEFT),
+		},
+	};
 
-    /* Configure PDM */
-    nrfx_pdm_config_t cfg = NRFX_PDM_DEFAULT_CONFIG(PDM_CLK_PIN, PDM_DIN_PIN);
-    cfg.clock_freq  = NRF_PDM_FREQ_1280K;
-    cfg.mode        = NRF_PDM_MODE_MONO;
-    cfg.edge        = NRF_PDM_EDGE_LEFTRISING; /* XIAO Sense: L/R=GND = left ch = rising edge */
-    cfg.ratio       = NRF_PDM_RATIO_80X;
-    cfg.gain_l      = 0x28; /* 0dB explicit */
-    cfg.gain_r      = 0x28;
+	ret = dmic_configure(dmic, &cfg);
+	if (ret < 0) {
+		LOG_ERR("dmic_configure failed: %d", ret);
+		return ret;
+	}
 
-    /* Wire the IRQ directly — critical for nrfx_pdm on Zephyr */
-    IRQ_DIRECT_CONNECT(PDM_IRQn, 5, nrfx_pdm_irq_handler, 0);
+	ret = dmic_trigger(dmic, DMIC_TRIGGER_START);
+	if (ret < 0) {
+		LOG_ERR("dmic_trigger START failed: %d", ret);
+		return ret;
+	}
 
-    err = nrfx_pdm_init(&cfg, pdm_event_handler);
-    if (err != NRFX_SUCCESS) {
-        LOG_ERR("nrfx_pdm_init failed: 0x%08x", err);
-        return -EIO;
-    }
+	mic_running = true;
 
-    /* Reset buffer index */
-    next_buf_idx = 0;
+	/* Spawn reader thread */
+	k_thread_create(&mic_thread_data, mic_thread_stack,
+			K_THREAD_STACK_SIZEOF(mic_thread_stack),
+			mic_reader_entry, NULL, NULL, NULL,
+			MIC_THREAD_PRIORITY, 0, K_NO_WAIT);
+	k_thread_name_set(&mic_thread_data, "mic_reader");
 
-    err = nrfx_pdm_start();
-    if (err != NRFX_SUCCESS) {
-        LOG_ERR("nrfx_pdm_start failed: 0x%08x", err);
-        nrfx_pdm_uninit();
-        return -EIO;
-    }
-
-    pdm_running = true;
-    LOG_INF("PDM capture started (nrfx, %d samples/frame, %d ms)",
-            SAMPLES_PER_FRAME, FRAME_SIZE_MS);
-    return 0;
+	LOG_INF("DMIC capture started (%d Hz, %d-bit, %d ms frames)",
+		SAMPLE_RATE, SAMPLE_BITS, FRAME_SIZE_MS);
+	return 0;
 }
 
 int mic_stop(void)
 {
-    if (!pdm_running) {
-        return 0;
-    }
+	int ret;
 
-    nrfx_pdm_stop();
-    nrfx_pdm_uninit();
-    
-    /* Disable mic power */
-    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 10));
-    LOG_INF("Mic power disabled");
-    
-    pdm_running = false;
+	if (!mic_running) {
+		return 0;
+	}
 
-    LOG_INF("PDM capture stopped");
-    return 0;
+	mic_running = false;
+
+	ret = dmic_trigger(dmic, DMIC_TRIGGER_STOP);
+	if (ret < 0) {
+		LOG_ERR("dmic_trigger STOP failed: %d", ret);
+		return ret;
+	}
+
+	/* Wait for reader thread to exit */
+	k_thread_join(&mic_thread_data, K_MSEC(2000));
+
+	LOG_INF("DMIC capture stopped");
+	return 0;
 }
 
 void mic_set_frame_callback(mic_frame_cb_t cb)
 {
-    frame_callback = cb;
+	frame_callback = cb;
 }

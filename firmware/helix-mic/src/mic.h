@@ -1,5 +1,5 @@
 /*
- * Helix-Mic - Header for PDM microphone capture (nrfx_pdm direct)
+ * Helix-Mic - Header for PDM microphone capture (Zephyr DMIC API)
  */
 
 #ifndef HELIX_MIC_H
@@ -15,14 +15,10 @@
 #define FRAME_SIZE_MS     100  /* 100ms frames = 1600 samples at 16kHz */
 #define SAMPLES_PER_FRAME (SAMPLE_RATE * FRAME_SIZE_MS / 1000)
 
-/* PDM pins for XIAO nRF52840 Sense */
-#define PDM_CLK_PIN  NRF_GPIO_PIN_MAP(0, 16)
-#define PDM_DIN_PIN  NRF_GPIO_PIN_MAP(0, 17)
-
 /* Audio frame callback — receives raw PCM buffer pointer (valid only during call) */
 typedef void (*mic_frame_cb_t)(int16_t *buf, size_t num_samples);
 
-/* Initialize PDM microphone */
+/* Initialize DMIC device */
 int mic_init(void);
 
 /* Start audio capture */
