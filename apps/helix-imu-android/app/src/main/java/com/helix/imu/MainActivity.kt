@@ -196,6 +196,7 @@ fun HelixIMUApp(bleManager: HelixBleManager) {
                     }
                 }
 
+                Spacer(modifier = Modifier.navigationBarsPadding())
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
