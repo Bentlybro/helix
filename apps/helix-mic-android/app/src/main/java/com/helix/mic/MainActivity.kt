@@ -220,7 +220,7 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                                             isTranscribing = true
                                             transcriptionError = null
                                             val client = WhisperClient(apiKey)
-                                            val result = client.transcribe(audioBuffer)
+                                            val result = client.transcribe(bleManager.getAudioBufferForTranscription())
                                             isTranscribing = false
                                             when (result.state) {
                                                 WhisperClient.TranscriptionState.SUCCESS -> {

@@ -85,15 +85,17 @@ class HelixMicBleManager(private val context: Context) {
     private val _isReceivingAudio = MutableStateFlow(false)
     val isReceivingAudio: StateFlow<Boolean> = _isReceivingAudio
 
-    // Rolling audio buffer - stores raw PCM data
+    // Rolling audio buffer — store chunks, concatenate only when needed
+    private val audioChunks = ArrayList<ByteArray>()
+    private var totalAudioBytes = 0
+    private val audioLock = Any()
+    private val maxBufferBytes = 320_000 // ~10s at 16kHz 16-bit mono
+
     private val _audioBuffer = MutableStateFlow<ByteArray>(ByteArray(0))
     val audioBuffer: StateFlow<ByteArray> = _audioBuffer
-    
+
     private val _packetCount = MutableStateFlow(0)
     val packetCount: StateFlow<Int> = _packetCount
-
-    // Maximum buffer size (roughly 10 seconds of 16kHz 16-bit mono audio = 320,000 bytes)
-    private val maxBufferSize = 320_000
 
     // Queue a GATT operation and execute if not busy
     private fun enqueue(op: () -> Unit) {
@@ -199,19 +201,15 @@ class HelixMicBleManager(private val context: Context) {
             when (characteristic.uuid) {
                 AUDIO_UUID -> {
                     val packet = AudioPacket.parse(characteristic.value) ?: return
-                    if (packet.isRawPcm) {
-                        // Append PCM data to buffer
-                        val currentBuffer = _audioBuffer.value
-                        val newBuffer = currentBuffer + packet.data
-                        
-                        // Keep buffer size in check (rolling)
-                        val trimmedBuffer = if (newBuffer.size > maxBufferSize) {
-                            newBuffer.copyOfRange(newBuffer.size - maxBufferSize, newBuffer.size)
-                        } else {
-                            newBuffer
+                    if (packet.isRawPcm && packet.data.isNotEmpty()) {
+                        synchronized(audioLock) {
+                            audioChunks.add(packet.data)
+                            totalAudioBytes += packet.data.size
+                            // Trim oldest chunks if over limit
+                            while (totalAudioBytes > maxBufferBytes && audioChunks.isNotEmpty()) {
+                                totalAudioBytes -= audioChunks.removeAt(0).size
+                            }
                         }
-                        
-                        _audioBuffer.value = trimmedBuffer
                         _packetCount.value = _packetCount.value + 1
                         _isReceivingAudio.value = true
                     }
@@ -246,11 +244,25 @@ class HelixMicBleManager(private val context: Context) {
     }
 
     fun clearAudioBuffer() {
+        synchronized(audioLock) {
+            audioChunks.clear()
+            totalAudioBytes = 0
+        }
         _audioBuffer.value = ByteArray(0)
         _packetCount.value = 0
+        _isReceivingAudio.value = false
     }
-    
+
+    /** Concatenate all chunks into a single ByteArray — only call when transcribing */
     fun getAudioBufferForTranscription(): ByteArray {
-        return _audioBuffer.value
+        synchronized(audioLock) {
+            val result = ByteArray(totalAudioBytes)
+            var offset = 0
+            for (chunk in audioChunks) {
+                chunk.copyInto(result, offset)
+                offset += chunk.size
+            }
+            return result
+        }
     }
 }
