@@ -84,8 +84,8 @@ uint8_t readBatteryPercent() {
   }
   raw /= 8;
 
-  // 3.6V internal reference, 12-bit, divider x2
-  float voltage = (float)raw * 3.6f * 2.0f / 4096.0f;
+  // 3.6V internal reference, 12-bit, no divider on PIN_VBAT
+  float voltage = (float)raw * 3.6f / 4096.0f;
 
   Serial.print("BAT raw:"); Serial.print(raw);
   Serial.print(" voltage:"); Serial.println(voltage, 3);
