@@ -10,6 +10,8 @@
 		regulator-name = "MSM261D3526HICPM-C-EN";
 		regulator-boot-on;
 	};
+
+
 };
 
 &pinctrl {

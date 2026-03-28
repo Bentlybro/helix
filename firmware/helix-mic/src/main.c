@@ -14,6 +14,7 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #include <zephyr/device.h>
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
+#include <hal/nrf_saadc.h>
 #include <zephyr/sys/ring_buffer.h>
 
 
@@ -26,17 +27,23 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #define BATTERY_ADC_NODE DT_NODELABEL(adc)
 
 /* Battery voltage divider: full charge ~4.2V, empty ~3.3V */
-/* ADC reference 3.6V, 12-bit resolution (0-4095) */
-/* Divider typically 1/2 on XIAO nRF52840 Sense */
+/* ADC: 0.6V internal ref, 1/4 gain → 2.4V range, 12-bit (0-4095) */
+/* XIAO nRF52840: 1/2 voltage divider on battery, enable via P0.14 */
 #define BATTERY_ADC_CHANNEL   7   /* AIN7 = P0.31 on nRF52840 */
 #define BATTERY_ADC_MAX       4095
-#define BATTERY_VREF_MV       3600
-#define BATTERY_DIVIDER       2
-#define BATTERY_MIN_MV        3300
-#define BATTERY_MAX_MV        4200
+#define BATTERY_ADC_RANGE_MV  2400  /* 0.6V ref * 4 (1/4 gain) = 2.4V */
+#define BATTERY_DIVIDER       2     /* Multiply ADC reading by 2 for actual voltage */
+#define BATTERY_MIN_MV        3200  /* LP502030 empty */
+#define BATTERY_MAX_MV        4200  /* LP502030 full */
 
 static const struct device *adc_dev;
-static struct gpio_dt_spec bat_en = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(bat_en_pin), gpios, {0});
+
+/* Battery enable pin: P0.14 on XIAO nRF52840 */
+static const struct gpio_dt_spec bat_en = {
+    .port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
+    .pin = 14,
+    .dt_flags = GPIO_ACTIVE_HIGH,
+};
 
 static int16_t adc_buffer;
 static struct adc_sequence adc_seq = {
@@ -45,11 +52,14 @@ static struct adc_sequence adc_seq = {
 };
 
 static struct adc_channel_cfg adc_cfg = {
-    .gain = ADC_GAIN_1,
-    .reference = ADC_REF_INTERNAL,
-    .acquisition_time = ADC_ACQ_TIME_DEFAULT,
+    .gain = ADC_GAIN_1_4,       /* 1/4 gain — maps 0-3.6V*4=14.4V range, good for divider */
+    .reference = ADC_REF_INTERNAL,  /* 0.6V internal ref */
+    .acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10),
     .channel_id = BATTERY_ADC_CHANNEL,
     .differential = 0,
+#if defined(CONFIG_ADC_NRFX_SAADC)
+    .input_positive = SAADC_CH_PSELP_PSELP_AnalogInput7,  /* AIN7 = P0.31 */
+#endif
 };
 
 /* Forward declarations */
@@ -63,7 +73,7 @@ static uint8_t read_battery_level(void);
 static volatile bool mic_running = false;
 
 /* Ring buffer for decoupling PDM callback from BLE sends */
-#define RING_BUF_PACKETS 8
+#define RING_BUF_PACKETS 16  /* ~1.6s buffer at 100ms frames */
 #define PCM_FRAME_BYTES  (1600 * sizeof(int16_t))  /* 3200 bytes per 100ms frame */
 
 static uint8_t ring_buf_data[RING_BUF_PACKETS * PCM_FRAME_BYTES];
@@ -293,12 +303,17 @@ static int init_battery_adc(void)
         return -ENODEV;
     }
     
-    /* Enable battery measurement circuit if pin defined */
-    if (bat_en.port != NULL) {
-        ret = gpio_pin_configure_dt(&bat_en, GPIO_OUTPUT_ACTIVE);
+    /* Enable battery measurement circuit — P0.14 HIGH to activate divider */
+    if (device_is_ready(bat_en.port)) {
+        ret = gpio_pin_configure(bat_en.port, bat_en.pin, GPIO_OUTPUT_ACTIVE);
         if (ret < 0) {
-            LOG_WRN("Battery enable pin config failed");
+            LOG_WRN("Battery enable pin config failed: %d", ret);
+        } else {
+            gpio_pin_set(bat_en.port, bat_en.pin, 1);
+            LOG_INF("Battery divider enabled (P0.14)");
         }
+    } else {
+        LOG_WRN("GPIO0 not ready for battery enable");
     }
     
     /* Configure ADC channel */
@@ -331,7 +346,10 @@ static uint8_t read_battery_level(void)
     
     /* Convert ADC value to millivolts */
     mv = adc_buffer;
-    mv = (mv * BATTERY_VREF_MV * BATTERY_DIVIDER) / BATTERY_ADC_MAX;
+    /* ADC reading → pin voltage → battery voltage */
+    mv = (mv * BATTERY_ADC_RANGE_MV) / BATTERY_ADC_MAX;  /* Pin voltage in mV */
+    mv = mv * BATTERY_DIVIDER;  /* Actual battery voltage (divider is 1/2) */
+    LOG_DBG("Battery ADC: raw=%d, pin_mv=%d, bat_mv=%d", adc_buffer, mv/2, mv);
     
     /* Convert to percentage */
     if (mv <= BATTERY_MIN_MV) {
