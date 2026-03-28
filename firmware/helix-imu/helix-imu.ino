@@ -235,12 +235,12 @@ void updateOrientation(float dt) {
   float gZ = myIMU.readFloatGyroZ();
 
   // Remap to head space — tweak these if axes feel wrong
-  float accelRoll  = aY;   // which accel axis drives roll
-  float accelPitch = aX;   // which accel axis drives pitch
+  float accelRoll  = -aY;  // nod down = positive pitch
+  float accelPitch = -aX;  // tilt right = positive roll
   float accelRef   = aZ;   // reference axis (gravity)
-  float gyroRoll   = gZ;   // which gyro axis drives roll
-  float gyroPitch  = gY;   // which gyro axis drives pitch
-  float gyroYaw    = gX;   // which gyro axis drives yaw
+  float gyroRoll   = -gZ;  // tilt right = positive roll
+  float gyroPitch  = -gY;  // nod down = positive pitch
+  float gyroYaw    = -gX;  // turn right = positive yaw
 
   float rollAccel  = atan2(accelRoll, accelRef) * RAD_TO_DEG;
   float pitchAccel = atan2(-accelPitch, sqrt(accelRoll * accelRoll + accelRef * accelRef)) * RAD_TO_DEG;
