@@ -200,10 +200,12 @@ class HelixMicBleManager(private val context: Context) {
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                when (characteristic.uuid) {
+            val uuid = characteristic.uuid
+            val value = characteristic.value?.copyOf()
+            if (status == BluetoothGatt.GATT_SUCCESS && value != null) {
+                when (uuid) {
                     BATTERY_UUID -> _batteryPercent.value =
-                        characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+                        value.firstOrNull()?.toInt()?.and(0xFF)
                 }
             }
             nextGattOp()
@@ -213,14 +215,18 @@ class HelixMicBleManager(private val context: Context) {
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
-            when (characteristic.uuid) {
+            // Extract UUID and value immediately — Android 16 invalidates the object
+            // after this callback returns, so we must copy everything up front
+            val uuid = characteristic.uuid
+            val value = characteristic.value?.copyOf() ?: return
+
+            when (uuid) {
                 AUDIO_UUID -> {
-                    val packet = AudioPacket.parse(characteristic.value) ?: return
+                    val packet = AudioPacket.parse(value) ?: return
                     if (packet.data.isNotEmpty()) {
                         synchronized(audioLock) {
                             audioChunks.add(packet.data)
                             totalAudioBytes += packet.data.size
-                            // Trim oldest chunks if over limit
                             while (totalAudioBytes > maxBufferBytes && audioChunks.isNotEmpty()) {
                                 totalAudioBytes -= audioChunks.removeAt(0).size
                             }
@@ -231,7 +237,7 @@ class HelixMicBleManager(private val context: Context) {
                     }
                 }
                 BATTERY_UUID -> _batteryPercent.value =
-                    characteristic.value.firstOrNull()?.toInt()?.and(0xFF)
+                    value.firstOrNull()?.toInt()?.and(0xFF)
             }
         }
     }
