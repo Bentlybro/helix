@@ -21,9 +21,9 @@
 #define BATTERY_UUID      "917649A2-D98E-11E5-9EEC-0002A5D5C51B"
 #define TEMPERATURE_UUID  "917649A3-D98E-11E5-9EEC-0002A5D5C51B"
 
-// Battery pins (XIAO nRF52840)
-#define BAT_READ_PIN   P0_31   // ADC pin for battery voltage
-#define BAT_ENABLE_PIN P0_14   // Pull LOW to enable battery read circuit
+// Battery pins (XIAO nRF52840 - non-mbed pin numbers)
+#define BAT_READ_PIN   32   // P0_31 = A0 = pin 32
+#define BAT_ENABLE_PIN 14   // P0_14 = pin 14, pull LOW to enable battery read
 
 // IMU
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
