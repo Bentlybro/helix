@@ -219,12 +219,14 @@ fun HeadVisualiser(orientation: Orientation) {
                 val cy = size.height / 2f
                 val r = minOf(cx, cy) * 0.55f
 
-                // Draw axes labels
                 drawGridLines(cx, cy, r)
 
-                // Forward direction arrow — shows yaw rotation horizontally, pitch vertically
-                val fwdX = cx + r * sin(yawRad) * cos(pitchRad)
-                val fwdY = cy - r * cos(yawRad) * cos(pitchRad) - r * 0.4f * sin(pitchRad)
+                // Device is mounted flat on side of head, USB pointing up
+                // Yaw = left/right turn, Pitch = nod up/down, Roll = tilt ear to shoulder
+
+                // Forward arrow — yaw sweeps left/right, pitch tilts up/down
+                val fwdX = cx + r * sin(yawRad)
+                val fwdY = cy - r * cos(yawRad) + r * 0.5f * sin(pitchRad)
 
                 drawArrow(
                     start = Offset(cx, cy),
@@ -233,8 +235,8 @@ fun HeadVisualiser(orientation: Orientation) {
                     strokeWidth = 4f
                 )
 
-                // Up direction — shows roll
-                val upX = cx + r * 0.5f * (-sin(rollRad))
+                // Up arrow — shows roll (tilt)
+                val upX = cx + r * 0.5f * sin(rollRad)
                 val upY = cy - r * 0.5f * cos(rollRad)
 
                 drawArrow(
@@ -244,7 +246,6 @@ fun HeadVisualiser(orientation: Orientation) {
                     strokeWidth = 3f
                 )
 
-                // Draw centre dot
                 drawCircle(Color.White, radius = 5f, center = Offset(cx, cy))
             }
 
