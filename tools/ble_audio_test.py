@@ -51,16 +51,30 @@ async def main():
     
     print(f"Found: {device.name} ({device.address})")
     
-    async with BleakClient(device, timeout=15) as client:
+    disconnected = asyncio.Event()
+    
+    def on_disconnect(client):
+        print("\n⚠️  Device disconnected!")
+        disconnected.set()
+    
+    async with BleakClient(device, timeout=15, disconnected_callback=on_disconnect) as client:
         print(f"Connected! MTU: {client.mtu_size}")
         
         # Subscribe to audio notifications
         await client.start_notify(AUDIO_UUID, audio_callback)
         print(f"Subscribed to audio. Recording {args.seconds}s...")
         
-        await asyncio.sleep(args.seconds)
+        # Wait for duration or disconnect
+        try:
+            await asyncio.wait_for(disconnected.wait(), timeout=args.seconds)
+        except asyncio.TimeoutError:
+            pass  # Normal — recording finished
         
-        await client.stop_notify(AUDIO_UUID)
+        if not disconnected.is_set():
+            try:
+                await client.stop_notify(AUDIO_UUID)
+            except Exception:
+                pass
         print(f"\nDone! Received {len(packets)} packets, {total_bytes} bytes")
     
     if not packets:

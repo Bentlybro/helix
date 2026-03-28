@@ -104,10 +104,13 @@ static void pusher_entry(void *p1, void *p2, void *p3)
 
             if (ret == 0) {
                 pusher_seq++;
-                if (pusher_seq % 100 == 1) {
+                if (pusher_seq % 500 == 1) {
                     LOG_INF("Audio pusher: sent %u packets, ring=%u",
                             pusher_seq, ring_buf_size_get(&audio_ring_buf));
                 }
+                /* Pace: ~7ms between 240-byte chunks = ~140 chunks/sec
+                 * 13 chunks per 100ms frame = exactly real-time */
+                k_sleep(K_MSEC(7));
             } else if (pusher_seq < 5) {
                 LOG_WRN("Audio send failed: %d (seq=%u)", ret, pusher_seq);
             }
