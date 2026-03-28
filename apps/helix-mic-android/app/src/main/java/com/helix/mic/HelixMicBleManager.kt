@@ -97,6 +97,9 @@ class HelixMicBleManager(private val context: Context) {
     private val _packetCount = MutableStateFlow(0)
     val packetCount: StateFlow<Int> = _packetCount
 
+    private val _totalAudioBytes = MutableStateFlow(0)
+    val totalAudioBytesFlow: StateFlow<Int> = _totalAudioBytes
+
     // Queue a GATT operation and execute if not busy
     private fun enqueue(op: () -> Unit) {
         gattQueue.add(op)
@@ -213,7 +216,7 @@ class HelixMicBleManager(private val context: Context) {
             when (characteristic.uuid) {
                 AUDIO_UUID -> {
                     val packet = AudioPacket.parse(characteristic.value) ?: return
-                    if (packet.isRawPcm && packet.data.isNotEmpty()) {
+                    if (packet.data.isNotEmpty()) {
                         synchronized(audioLock) {
                             audioChunks.add(packet.data)
                             totalAudioBytes += packet.data.size
@@ -223,6 +226,7 @@ class HelixMicBleManager(private val context: Context) {
                             }
                         }
                         _packetCount.value = _packetCount.value + 1
+                        _totalAudioBytes.value = totalAudioBytes
                         _isReceivingAudio.value = true
                     }
                 }
@@ -262,6 +266,7 @@ class HelixMicBleManager(private val context: Context) {
         }
         _audioBuffer.value = ByteArray(0)
         _packetCount.value = 0
+        _totalAudioBytes.value = 0
         _isReceivingAudio.value = false
     }
 

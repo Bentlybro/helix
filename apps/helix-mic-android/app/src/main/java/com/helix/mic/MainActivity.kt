@@ -2,6 +2,9 @@ package com.helix.mic
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -58,11 +61,13 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
     val isReceivingAudio by bleManager.isReceivingAudio.collectAsState()
     val audioBuffer by bleManager.audioBuffer.collectAsState()
     val packetCount by bleManager.packetCount.collectAsState()
+    val totalAudioBytes by bleManager.totalAudioBytesFlow.collectAsState()
     
     var showSettings by remember { mutableStateOf(false) }
     var apiKey by remember { mutableStateOf(sharedPrefs.getString("openai_api_key", "") ?: "") }
     var transcript by remember { mutableStateOf("") }
     var isTranscribing by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(false) }
     var transcriptionError by remember { mutableStateOf<String?>(null) }
     
     val scope = rememberCoroutineScope()
@@ -87,7 +92,7 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
     )
     
     // Calculate audio duration (16kHz, 16-bit mono = 32000 bytes/sec)
-    val audioDurationSec = audioBuffer.size / 32000f
+    val audioDurationSec = totalAudioBytes / 32000f
     
     MaterialTheme(
         colorScheme = darkColorScheme(
@@ -210,6 +215,58 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                                 Text("Clear", color = Color.Gray)
                             }
                             
+                            // Play button
+                            if (totalAudioBytes > 0) {
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            isPlaying = true
+                                            try {
+                                                val pcmData = bleManager.getAudioBufferForTranscription()
+                                                if (pcmData.isNotEmpty()) {
+                                                    val audioTrack = AudioTrack.Builder()
+                                                        .setAudioAttributes(
+                                                            AudioAttributes.Builder()
+                                                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                                                .build()
+                                                        )
+                                                        .setAudioFormat(
+                                                            AudioFormat.Builder()
+                                                                .setSampleRate(16000)
+                                                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                                                .build()
+                                                        )
+                                                        .setTransferMode(AudioTrack.MODE_STATIC)
+                                                        .setBufferSizeInBytes(pcmData.size)
+                                                        .build()
+                                                    audioTrack.write(pcmData, 0, pcmData.size)
+                                                    audioTrack.play()
+                                                    // Wait for playback to finish
+                                                    val durationMs = (pcmData.size / 32000f * 1000).toLong()
+                                                    kotlinx.coroutines.delay(durationMs + 200)
+                                                    audioTrack.stop()
+                                                    audioTrack.release()
+                                                }
+                                            } finally {
+                                                isPlaying = false
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    enabled = !isPlaying,
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = Color(0xFF00FF88)
+                                    )
+                                ) {
+                                    Text(
+                                        if (isPlaying) "Playing..." else "▶ Play",
+                                        color = Color(0xFF00FF88)
+                                    )
+                                }
+                            }
+                            
                             // Transcribe button
                             Button(
                                 onClick = {
@@ -235,7 +292,7 @@ fun HelixMicApp(bleManager: HelixMicBleManager, sharedPrefs: SharedPreferences) 
                                     }
                                 },
                                 modifier = Modifier.weight(1f),
-                                enabled = !isTranscribing && audioBuffer.isNotEmpty(),
+                                enabled = !isTranscribing && totalAudioBytes > 0,
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.primary
                                 )
