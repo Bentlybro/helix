@@ -14,6 +14,7 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #include <zephyr/device.h>
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/ring_buffer.h>
 
 
 #include "mic.h"
@@ -61,6 +62,53 @@ static uint8_t read_battery_level(void);
 /* Track mic state for fallback start */
 static volatile bool mic_running = false;
 
+/* Ring buffer for decoupling PDM callback from BLE sends */
+#define RING_BUF_PACKETS 8
+#define PCM_FRAME_BYTES  (1600 * sizeof(int16_t))  /* 3200 bytes per 100ms frame */
+
+static uint8_t ring_buf_data[RING_BUF_PACKETS * PCM_FRAME_BYTES];
+static struct ring_buf audio_ring_buf;
+
+/* Pusher thread — drains ring buffer into BLE notifications */
+K_THREAD_STACK_DEFINE(pusher_stack, 4096);
+static struct k_thread pusher_thread;
+
+static uint16_t pusher_seq = 0;
+#define CHUNK_SIZE 240
+
+static void pusher_entry(void *p1, void *p2, void *p3)
+{
+    ARG_UNUSED(p1);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
+
+    uint8_t chunk[CHUNK_SIZE];
+
+    while (1) {
+        if (!transport_is_connected() || ring_buf_size_get(&audio_ring_buf) == 0) {
+            k_sleep(K_MSEC(5));
+            continue;
+        }
+
+        size_t got = ring_buf_get(&audio_ring_buf, chunk, CHUNK_SIZE);
+        if (got > 0) {
+            int ret;
+            int retries = 0;
+            do {
+                ret = transport_send_audio(chunk, got, pusher_seq, 0x01);
+                if (ret == -ENOBUFS || ret == -ENOMEM) {
+                    k_sleep(K_MSEC(2));
+                    retries++;
+                }
+            } while ((ret == -ENOBUFS || ret == -ENOMEM) && retries < 20);
+
+            if (ret == 0) {
+                pusher_seq++;
+            }
+        }
+    }
+}
+
 /* Main thread */
 int main(void)
 {
@@ -100,6 +148,14 @@ int main(void)
         LOG_WRN("Battery ADC init failed: %d", ret);
     }
     
+    /* Initialize audio ring buffer and pusher thread */
+    ring_buf_init(&audio_ring_buf, sizeof(ring_buf_data), ring_buf_data);
+    k_thread_create(&pusher_thread, pusher_stack,
+                    K_THREAD_STACK_SIZEOF(pusher_stack),
+                    pusher_entry, NULL, NULL, NULL,
+                    K_PRIO_PREEMPT(7), 0, K_NO_WAIT);
+    k_thread_name_set(&pusher_thread, "pusher");
+
     /* Set callbacks */
     mic_set_frame_callback(audio_frame_handler);
     transport_set_conn_callback(connection_changed);
@@ -146,46 +202,18 @@ int main(void)
     return 0;
 }
 
-/* Max PCM bytes per BLE packet (MTU 247 - 3 ATT - 3 header = 241, round to 240) */
-#define BLE_AUDIO_CHUNK_BYTES 240
-
-static uint16_t audio_seq = 0;
-
 static void audio_frame_handler(int16_t *buf, size_t num_samples)
 {
     if (!transport_is_connected()) {
         return;
     }
-    
+
     led_notify_audio();
-    
-    /* Send PCM in BLE-sized chunks */
-    const uint8_t *pcm = (const uint8_t *)buf;
-    size_t total_bytes = num_samples * sizeof(int16_t);
-    size_t offset = 0;
-    
-    while (offset < total_bytes) {
-        size_t chunk = total_bytes - offset;
-        if (chunk > BLE_AUDIO_CHUNK_BYTES) {
-            chunk = BLE_AUDIO_CHUNK_BYTES;
-        }
-        
-        int ret;
-        int retries = 0;
-        do {
-            ret = transport_send_audio(pcm + offset, chunk, audio_seq, 0x01);
-            if (ret == -ENOBUFS || ret == -ENOMEM) {
-                k_sleep(K_MSEC(5)); /* yield to let BLE stack drain */
-                retries++;
-            }
-        } while ((ret == -ENOBUFS || ret == -ENOMEM) && retries < 10);
-        
-        if (ret < 0) {
-            LOG_DBG("Send failed at offset %zu: %d (after %d retries)", offset, ret, retries);
-            break;
-        }
-        audio_seq++;
-        offset += chunk;
+
+    size_t bytes = num_samples * sizeof(int16_t);
+    int written = ring_buf_put(&audio_ring_buf, (uint8_t *)buf, bytes);
+    if (written != (int)bytes) {
+        LOG_WRN("Ring buf full, dropped %zu bytes", bytes - (size_t)written);
     }
 }
 
