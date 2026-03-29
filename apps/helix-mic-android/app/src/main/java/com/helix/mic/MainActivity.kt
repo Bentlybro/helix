@@ -1,12 +1,19 @@
 package com.helix.mic
 
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -161,6 +168,37 @@ fun HelixMicApp(
 
     val scope = rememberCoroutineScope()
 
+    // Listen for STOP broadcast from foreground service notification
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action == HelixForegroundService.ACTION_STOP && isRecording) {
+                    isRecording = false
+                    if (useLocalServer) localServerClient.stop() else openAiService?.stop()
+                    val fullText = segments.joinToString(" ") { it.text }
+                    if (fullText.isNotBlank()) {
+                        scope.launch(Dispatchers.IO) {
+                            val result = SummaryClient(apiKey).summarize(fullText)
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                if (result.success) summary = result.summary
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(
+                receiver,
+                IntentFilter(HelixForegroundService.ACTION_STOP),
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            context.registerReceiver(receiver, IntentFilter(HelixForegroundService.ACTION_STOP))
+        }
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+
     LaunchedEffect(useLocalServer, openAiService, isRecording) {
         if (isRecording) {
             bleManager.audioFrames.collect { frame ->
@@ -170,12 +208,14 @@ fun HelixMicApp(
         }
     }
 
-    val blePermissions = rememberMultiplePermissionsState(
-        permissions = listOf(
-            android.Manifest.permission.BLUETOOTH_SCAN,
-            android.Manifest.permission.BLUETOOTH_CONNECT,
-        )
-    )
+    val permissionsList = buildList {
+        add(Manifest.permission.BLUETOOTH_SCAN)
+        add(Manifest.permission.BLUETOOTH_CONNECT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    val blePermissions = rememberMultiplePermissionsState(permissions = permissionsList)
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -449,8 +489,10 @@ fun HelixMicApp(
                                         currentSessionId = sessionManager.startSession()
                                         sessionStartTime = System.currentTimeMillis()
                                         isRecording = true
+                                        HelixForegroundService.start(context)
                                     } else {
                                         isRecording = false
+                                        HelixForegroundService.stop(context)
                                         if (useLocalServer) localServerClient.stop() else openAiService?.stop()
                                         val fullText = segments.joinToString(" ") { it.text }
                                         if (fullText.isNotBlank()) {
@@ -469,6 +511,7 @@ fun HelixMicApp(
                                 onDisconnect = {
                                     if (isRecording) {
                                         isRecording = false
+                                        HelixForegroundService.stop(context)
                                         if (useLocalServer) localServerClient.stop() else openAiService?.stop()
                                     }
                                     bleManager.disconnect()
