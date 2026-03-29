@@ -68,6 +68,9 @@ class HelixForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Always ensure notification channel exists before any notification work
+        createNotificationChannel()
+
         if (intent?.action == ACTION_STOP) {
             Log.d(TAG, "Stop action received")
             sendBroadcast(Intent(ACTION_STOP).setPackage(packageName))
@@ -96,19 +99,24 @@ class HelixForegroundService : Service() {
 
         val notification = buildNotification("Connected - Idle")
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            Log.d(TAG, "startForeground() succeeded")
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground() FAILED", e)
         }
 
         handler.post(tickRunnable)
@@ -132,16 +140,22 @@ class HelixForegroundService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Helix Mic Recording",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Shows when Helix Mic is recording"
-                setShowBadge(false)
-            }
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            // Only create if not already present
+            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    "Helix Mic Recording",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Shows when Helix Mic is recording"
+                    setShowBadge(false)
+                }
+                manager.createNotificationChannel(channel)
+                Log.d(TAG, "Notification channel '$CHANNEL_ID' created")
+            } else {
+                Log.d(TAG, "Notification channel '$CHANNEL_ID' already exists")
+            }
         }
     }
 

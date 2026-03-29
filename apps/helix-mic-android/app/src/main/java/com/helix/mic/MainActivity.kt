@@ -7,8 +7,11 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -24,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -33,7 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -95,6 +102,17 @@ class MainActivity : ComponentActivity() {
         sharedPrefs = getSharedPreferences("helix_mic_prefs", Context.MODE_PRIVATE)
         sessionManager = SessionManager(sharedPrefs)
         enableEdgeToEdge()
+
+        // Check battery optimization — prompt user to disable for reliable BLE background
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                intent.data = Uri.parse("package:$packageName")
+                startActivity(intent)
+            } catch (_: Exception) { /* Some ROMs don't support this */ }
+        }
+
         setContent { HelixMicApp(bleManager, sharedPrefs, sessionManager) }
     }
 
@@ -175,12 +193,22 @@ fun HelixMicApp(
                 if (intent?.action == HelixForegroundService.ACTION_STOP && isRecording) {
                     isRecording = false
                     if (useLocalServer) localServerClient.stop() else openAiService?.stop()
+                    // Auto-save session
+                    currentSessionId?.let { id ->
+                        sessionManager.stopSession(id, segments.toList(), null)
+                        sessionSaved = true
+                    }
                     val fullText = segments.joinToString(" ") { it.text }
                     if (fullText.isNotBlank()) {
                         scope.launch(Dispatchers.IO) {
                             val result = SummaryClient(apiKey).summarize(fullText)
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                if (result.success) summary = result.summary
+                                if (result.success) {
+                                    summary = result.summary
+                                    currentSessionId?.let { id ->
+                                        sessionManager.updateSessionSummary(id, result.summary ?: "")
+                                    }
+                                }
                             }
                         }
                     }
@@ -299,8 +327,14 @@ fun HelixMicApp(
                     )
                 }
                 Screen.SESSION_DETAIL -> {
-                    selectedSession?.let { SessionDetailScreen(session = it, onBack = { currentScreen = Screen.SESSIONS }) }
-                        ?: run { currentScreen = Screen.SESSIONS }
+                    selectedSession?.let {
+                        SessionDetailScreen(
+                            session = it,
+                            sessionManager = sessionManager,
+                            onBack = { currentScreen = Screen.SESSIONS },
+                            onDeleted = { selectedSession = null; currentScreen = Screen.SESSIONS }
+                        )
+                    } ?: run { currentScreen = Screen.SESSIONS }
                 }
                 Screen.MAIN -> {
                     Column(
@@ -450,40 +484,41 @@ fun HelixMicApp(
                                 }
                             }
 
-                            // Save button
-                            if (!isRecording && segments.isNotEmpty() && !sessionSaved) {
-                                OutlinedButton(
-                                    onClick = {
-                                        currentSessionId?.let { id ->
-                                            sessionManager.stopSession(id, segments.toList(), summary)
-                                            sessionSaved = true
-                                            Toast.makeText(context, "Session saved", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp).height(40.dp),
-                                    shape = HelixTheme.SharpShape,
-                                    border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextSecondary)
+                            // Auto-saved indicator + Dismiss button
+                            if (!isRecording && segments.isNotEmpty() && sessionSaved) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        "SAVE SESSION",
+                                        "AUTO-SAVED",
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Light,
-                                        letterSpacing = 3.sp
+                                        color = HelixTheme.TextSecondary,
+                                        letterSpacing = 2.sp
                                     )
+                                    OutlinedButton(
+                                        onClick = {
+                                            currentSessionId?.let { id ->
+                                                sessionManager.deleteSession(id)
+                                                sessionSaved = false
+                                                Toast.makeText(context, "Session dismissed", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        shape = HelixTheme.SharpShape,
+                                        border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted)
+                                    ) {
+                                        Text(
+                                            "DISMISS",
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Light,
+                                            letterSpacing = 2.sp
+                                        )
+                                    }
                                 }
-                            }
-
-                            if (!isRecording && sessionSaved) {
-                                Text(
-                                    "SESSION SAVED",
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = HelixTheme.TextSecondary,
-                                    letterSpacing = 2.sp,
-                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                                )
                             }
 
                             // Bottom: Record button
@@ -508,6 +543,11 @@ fun HelixMicApp(
                                     } else {
                                         isRecording = false
                                         if (useLocalServer) localServerClient.stop() else openAiService?.stop()
+                                        // Auto-save session immediately
+                                        currentSessionId?.let { id ->
+                                            sessionManager.stopSession(id, segments.toList(), null)
+                                            sessionSaved = true
+                                        }
                                         val fullText = segments.joinToString(" ") { it.text }
                                         if (fullText.isNotBlank()) {
                                             isSummarizing = true
@@ -515,8 +555,15 @@ fun HelixMicApp(
                                                 val result = SummaryClient(apiKey).summarize(fullText)
                                                 kotlinx.coroutines.withContext(Dispatchers.Main) {
                                                     isSummarizing = false
-                                                    if (result.success) summary = result.summary
-                                                    else Toast.makeText(context, "Summary failed: ${result.error}", Toast.LENGTH_SHORT).show()
+                                                    if (result.success) {
+                                                        summary = result.summary
+                                                        // Update saved session with summary
+                                                        currentSessionId?.let { id ->
+                                                            sessionManager.updateSessionSummary(id, result.summary ?: "")
+                                                        }
+                                                    } else {
+                                                        Toast.makeText(context, "Summary failed: ${result.error}", Toast.LENGTH_SHORT).show()
+                                                    }
                                                 }
                                             }
                                         }
@@ -930,14 +977,60 @@ fun SessionsListScreen(
     onBack: () -> Unit,
     onSessionClick: (Session) -> Unit
 ) {
-    val sessions = remember { sessionManager.loadSessions() }
+    var sessions by remember { mutableStateOf(sessionManager.loadSessions()) }
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
     ) {
-        ScreenHeader(title = "SESSIONS", onBack = onBack)
+        // Header with session count
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "<",
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.TextSecondary,
+                modifier = Modifier.clickable(onClick = onBack).padding(end = 16.dp)
+            )
+            Text(
+                "SESSIONS",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Light,
+                color = HelixTheme.TextSecondary,
+                letterSpacing = 3.sp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "(${sessions.size})",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.TextMuted
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            if (sessions.isNotEmpty()) {
+                Text(
+                    "DELETE ALL",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Light,
+                    color = HelixTheme.RecordingRed,
+                    letterSpacing = 2.sp,
+                    modifier = Modifier.clickable {
+                        sessionManager.deleteAllSessions()
+                        sessions = emptyList()
+                        Toast.makeText(context, "All sessions deleted", Toast.LENGTH_SHORT).show()
+                    }.padding(4.dp)
+                )
+            }
+        }
         HairlineDivider()
 
         if (sessions.isEmpty()) {
@@ -955,13 +1048,74 @@ fun SessionsListScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                items(sessions) { session ->
-                    SessionRow(session = session, onClick = { onSessionClick(session) })
+                items(sessions, key = { it.id }) { session ->
+                    SwipeToDeleteRow(
+                        onDelete = {
+                            sessionManager.deleteSession(session.id)
+                            sessions = sessionManager.loadSessions()
+                            Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
+                        }
+                    ) {
+                        SessionRow(session = session, onClick = { onSessionClick(session) })
+                    }
                     Spacer(modifier = Modifier.height(1.dp))
                     HairlineDivider()
                     Spacer(modifier = Modifier.height(12.dp))
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun SwipeToDeleteRow(
+    onDelete: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    var offsetX by remember { mutableStateOf(0f) }
+    val threshold = -200f
+
+    Box(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        // Delete background
+        if (offsetX < -20f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .matchParentSize()
+                    .background(HelixTheme.RecordingRed.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Text(
+                    "DELETE",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.RecordingRed,
+                    letterSpacing = 2.sp,
+                    modifier = Modifier.padding(end = 16.dp)
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .offset(x = (offsetX / 3).dp)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (offsetX < threshold) {
+                                onDelete()
+                            }
+                            offsetX = 0f
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            offsetX = (offsetX + dragAmount).coerceAtMost(0f)
+                        }
+                    )
+                }
+        ) {
+            content()
         }
     }
 }
@@ -1001,11 +1155,23 @@ fun SessionRow(session: Session, onClick: () -> Unit) {
                 color = HelixTheme.TextMuted
             )
         }
+        if (session.title != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                session.title,
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Normal,
+                color = HelixTheme.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             preview,
             fontSize = 14.sp,
-            color = HelixTheme.TextPrimary,
+            color = if (session.title != null) HelixTheme.TextSecondary else HelixTheme.TextPrimary,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             lineHeight = 20.sp
@@ -1028,20 +1194,29 @@ fun SessionRow(session: Session, onClick: () -> Unit) {
 // ─────────────────────────────────────────────────────────────
 
 @Composable
-fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
+fun SessionDetailScreen(
+    session: Session,
+    sessionManager: SessionManager,
+    onBack: () -> Unit,
+    onDeleted: () -> Unit
+) {
     val dateStr = remember(session.startTime) {
         SimpleDateFormat("yyyy-MM-dd  HH:mm", Locale.getDefault()).format(Date(session.startTime))
     }
     val durationStr = remember(session.startTime, session.endTime) {
         formatDuration((session.endTime - session.startTime) / 1000)
     }
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    var isEditing by remember { mutableStateOf(false) }
+    var editTitle by remember { mutableStateOf(session.title ?: "") }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
     ) {
-        // Header with date and duration
+        // Header with date, duration, and edit
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1055,7 +1230,17 @@ fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
                 color = HelixTheme.TextSecondary,
                 modifier = Modifier.clickable(onClick = onBack).padding(end = 16.dp)
             )
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
+                if (session.title != null) {
+                    Text(
+                        session.title,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Normal,
+                        color = HelixTheme.TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
                 Text(
                     dateStr,
                     fontSize = 12.sp,
@@ -1070,32 +1255,141 @@ fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
                     color = HelixTheme.TextMuted
                 )
             }
+            Text(
+                "EDIT",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Light,
+                color = HelixTheme.TextSecondary,
+                letterSpacing = 2.sp,
+                modifier = Modifier.clickable { isEditing = true }.padding(4.dp)
+            )
         }
 
         HairlineDivider()
 
+        // Edit title dialog
+        if (isEditing) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(HelixTheme.SurfaceSubtle)
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    "SESSION TITLE",
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextMuted,
+                    letterSpacing = 2.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = editTitle,
+                    onValueChange = { editTitle = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Untitled session", color = HelixTheme.TextMuted, fontFamily = FontFamily.Monospace, fontSize = 13.sp) },
+                    singleLine = true,
+                    shape = HelixTheme.SharpShape,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = HelixTheme.BorderDefault,
+                        unfocusedBorderColor = HelixTheme.BorderDefault,
+                        focusedTextColor = HelixTheme.TextPrimary,
+                        unfocusedTextColor = HelixTheme.TextPrimary,
+                        cursorColor = HelixTheme.TextPrimary
+                    ),
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = HelixTheme.TextPrimary)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            val newTitle = editTitle.ifBlank { null }
+                            sessionManager.updateSessionTitle(session.id, newTitle)
+                            isEditing = false
+                            Toast.makeText(context, "Title updated", Toast.LENGTH_SHORT).show()
+                            // Navigate back to refresh
+                            onBack()
+                        },
+                        shape = HelixTheme.SharpShape,
+                        border = BorderStroke(0.5.dp, HelixTheme.TextSecondary),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextPrimary)
+                    ) {
+                        Text("SAVE", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { isEditing = false; editTitle = session.title ?: "" },
+                        shape = HelixTheme.SharpShape,
+                        border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted)
+                    ) {
+                        Text("CANCEL", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
+                    }
+                }
+            }
+            HairlineDivider()
+        }
+
         LazyColumn(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f)
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             if (session.summary != null) {
                 item {
-                    SummarySection(summary = session.summary, modifier = Modifier.padding(bottom = 8.dp))
+                    SummarySection(summary = session.summary, modifier = Modifier.padding(bottom = 4.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(stripMarkdown(session.summary)))
+                            Toast.makeText(context, "Summary copied", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.height(32.dp),
+                        shape = HelixTheme.SharpShape,
+                        border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                    ) {
+                        Text("COPY SUMMARY", fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
+                    }
                 }
             }
 
             item {
-                Text(
-                    "TRANSCRIPT",
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Light,
-                    color = HelixTheme.TextMuted,
-                    letterSpacing = 3.sp,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "TRANSCRIPT",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Light,
+                        color = HelixTheme.TextMuted,
+                        letterSpacing = 3.sp,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            val fullTranscript = session.transcript.joinToString("\n") { seg ->
+                                val time = SimpleDateFormat("mm:ss", Locale.getDefault()).format(Date(seg.timestamp))
+                                val speaker = if (seg.speaker != null) " [${seg.speaker}]" else ""
+                                "[$time]$speaker ${seg.text}"
+                            }
+                            clipboardManager.setText(AnnotatedString(fullTranscript))
+                            Toast.makeText(context, "Transcript copied", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.height(32.dp),
+                        shape = HelixTheme.SharpShape,
+                        border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                    ) {
+                        Text("COPY TRANSCRIPT", fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
+                    }
+                }
                 Spacer(modifier = Modifier.height(6.dp))
                 HairlineDivider()
             }
@@ -1116,6 +1410,32 @@ fun SessionDetailScreen(session: Session, onBack: () -> Unit) {
             }
 
             item { Spacer(modifier = Modifier.height(16.dp)) }
+        }
+
+        // Delete button at bottom
+        HairlineDivider()
+        OutlinedButton(
+            onClick = {
+                sessionManager.deleteSession(session.id)
+                Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
+                onDeleted()
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .navigationBarsPadding()
+                .height(40.dp),
+            shape = HelixTheme.SharpShape,
+            border = BorderStroke(0.5.dp, HelixTheme.RecordingRed.copy(alpha = 0.5f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.RecordingRed)
+        ) {
+            Text(
+                "DELETE SESSION",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Light,
+                letterSpacing = 3.sp
+            )
         }
     }
 }

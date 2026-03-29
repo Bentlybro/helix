@@ -11,13 +11,15 @@ data class Session(
     val startTime: Long,
     val endTime: Long,
     val transcript: List<TranscriptSegment>,
-    val summary: String?
+    val summary: String?,
+    val title: String? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("startTime", startTime)
         put("endTime", endTime)
         put("summary", summary ?: JSONObject.NULL)
+        put("title", title ?: JSONObject.NULL)
         put("transcript", JSONArray().apply {
             transcript.forEach { seg ->
                 put(JSONObject().apply {
@@ -47,7 +49,8 @@ data class Session(
                 startTime = json.getLong("startTime"),
                 endTime = json.getLong("endTime"),
                 transcript = segments,
-                summary = if (json.isNull("summary")) null else json.getString("summary")
+                summary = if (json.isNull("summary")) null else json.getString("summary"),
+                title = if (json.has("title") && !json.isNull("title")) json.getString("title") else null
             )
         }
     }
@@ -107,7 +110,29 @@ class SessionManager(private val prefs: SharedPreferences) {
         }
     }
 
-    private fun saveSession(session: Session) {
+    fun deleteSession(sessionId: String) {
+        val sessions = loadSessions().toMutableList()
+        sessions.removeAll { it.id == sessionId }
+        saveSessions(sessions)
+        Log.d(TAG, "Session $sessionId deleted")
+    }
+
+    fun deleteAllSessions() {
+        saveSessions(emptyList())
+        Log.d(TAG, "All sessions deleted")
+    }
+
+    fun updateSessionTitle(sessionId: String, title: String?) {
+        val sessions = loadSessions().toMutableList()
+        val index = sessions.indexOfFirst { it.id == sessionId }
+        if (index >= 0) {
+            sessions[index] = sessions[index].copy(title = title)
+            saveSessions(sessions)
+            Log.d(TAG, "Session $sessionId title updated")
+        }
+    }
+
+    fun saveSession(session: Session) {
         val sessions = loadSessions().toMutableList()
         sessions.add(0, session) // newest first
         // Trim to max
