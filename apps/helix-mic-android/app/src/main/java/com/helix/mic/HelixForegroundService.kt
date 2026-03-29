@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
@@ -23,6 +24,8 @@ class HelixForegroundService : Service() {
         const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "com.helix.mic.STOP"
 
+        private const val ACTION_SET_RECORDING = "com.helix.mic.SET_RECORDING"
+
         fun start(context: Context) {
             val intent = Intent(context, HelixForegroundService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -30,6 +33,14 @@ class HelixForegroundService : Service() {
             } else {
                 context.startService(intent)
             }
+        }
+
+        fun setRecording(context: Context, recording: Boolean) {
+            val intent = Intent(context, HelixForegroundService::class.java).apply {
+                action = ACTION_SET_RECORDING
+                putExtra("recording", recording)
+            }
+            context.startService(intent)
         }
 
         fun stop(context: Context) {
@@ -40,6 +51,8 @@ class HelixForegroundService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var startTimeMs = 0L
     private var running = false
+    private var isRecording = false
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private val tickRunnable = object : Runnable {
         override fun run() {
@@ -57,16 +70,31 @@ class HelixForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             Log.d(TAG, "Stop action received")
-            // Send broadcast so MainActivity can handle stopping recording
             sendBroadcast(Intent(ACTION_STOP).setPackage(packageName))
             stopSelf()
             return START_NOT_STICKY
         }
 
-        startTimeMs = System.currentTimeMillis()
-        running = true
+        if (intent?.action == ACTION_SET_RECORDING) {
+            isRecording = intent.getBooleanExtra("recording", false)
+            if (isRecording) {
+                startTimeMs = System.currentTimeMillis()
+            }
+            updateNotification()
+            return START_STICKY
+        }
 
-        val notification = buildNotification("Recording - 0:00")
+        // Initial start — connected but not yet recording
+        running = true
+        isRecording = false
+
+        // Acquire wake lock to prevent CPU sleep
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HelixMic::BLE").apply {
+            acquire(4 * 60 * 60 * 1000L) // 4 hour max
+        }
+
+        val notification = buildNotification("Connected - Idle")
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -92,6 +120,10 @@ class HelixForegroundService : Service() {
     override fun onDestroy() {
         running = false
         handler.removeCallbacks(tickRunnable)
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+        }
+        wakeLock = null
         Log.d(TAG, "Foreground service destroyed")
         super.onDestroy()
     }
@@ -144,12 +176,16 @@ class HelixForegroundService : Service() {
     }
 
     private fun updateNotification() {
-        val elapsed = (System.currentTimeMillis() - startTimeMs) / 1000
-        val minutes = elapsed / 60
-        val seconds = elapsed % 60
-        val timeStr = "%d:%02d".format(minutes, seconds)
+        val text = if (isRecording) {
+            val elapsed = (System.currentTimeMillis() - startTimeMs) / 1000
+            val minutes = elapsed / 60
+            val seconds = elapsed % 60
+            "Recording - %d:%02d".format(minutes, seconds)
+        } else {
+            "Connected - Idle"
+        }
 
-        val notification = buildNotification("Recording - $timeStr")
+        val notification = buildNotification(text)
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, notification)
     }

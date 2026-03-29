@@ -226,6 +226,22 @@ fun HelixMicApp(
         ), label = "pulseScale"
     )
 
+    // Start foreground service on BLE connect, stop on disconnect
+    LaunchedEffect(connectionState) {
+        if (connectionState == ConnectionState.CONNECTED) {
+            HelixForegroundService.start(context)
+        } else if (connectionState == ConnectionState.DISCONNECTED) {
+            HelixForegroundService.stop(context)
+        }
+    }
+
+    // Update service notification state when recording changes
+    LaunchedEffect(isRecording) {
+        if (connectionState == ConnectionState.CONNECTED) {
+            HelixForegroundService.setRecording(context, isRecording)
+        }
+    }
+
     var elapsedSeconds by remember { mutableStateOf(0L) }
     LaunchedEffect(isRecording, sessionStartTime) {
         if (isRecording && sessionStartTime > 0) {
@@ -489,10 +505,8 @@ fun HelixMicApp(
                                         currentSessionId = sessionManager.startSession()
                                         sessionStartTime = System.currentTimeMillis()
                                         isRecording = true
-                                        HelixForegroundService.start(context)
                                     } else {
                                         isRecording = false
-                                        HelixForegroundService.stop(context)
                                         if (useLocalServer) localServerClient.stop() else openAiService?.stop()
                                         val fullText = segments.joinToString(" ") { it.text }
                                         if (fullText.isNotBlank()) {
