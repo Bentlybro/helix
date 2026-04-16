@@ -167,6 +167,12 @@ fun HelixMicApp(
         mutableStateOf(WhisperModel.fromId(sharedPrefs.getString("whisper_model", WhisperModel.BASE_EN.id)))
     }
 
+    // Webhook integration
+    var webhookUrl by remember { mutableStateOf(sharedPrefs.getString("webhook_url", "") ?: "") }
+    var webhookLive by remember { mutableStateOf(sharedPrefs.getBoolean("webhook_live_segments", false)) }
+    var webhookSummary by remember { mutableStateOf(sharedPrefs.getBoolean("webhook_session_summary", false)) }
+    val webhookClient = remember { WebhookClient() }
+
     var isRecording by remember { mutableStateOf(false) }
     var currentSessionId by remember { mutableStateOf<String?>(null) }
     var audioRecorder by remember { mutableStateOf<SessionAudioRecorder?>(null) }
@@ -218,6 +224,13 @@ fun HelixMicApp(
 
     val scope = rememberCoroutineScope()
 
+    // Webhook: POST each new segment as it arrives
+    LaunchedEffect(segments.size) {
+        if (webhookLive && webhookUrl.isNotBlank() && isRecording && segments.isNotEmpty()) {
+            webhookClient.postSegment(webhookUrl, segments.last(), currentSessionId)
+        }
+    }
+
     // Listen for STOP broadcast from foreground service notification
     DisposableEffect(Unit) {
         val receiver = object : BroadcastReceiver() {
@@ -241,6 +254,9 @@ fun HelixMicApp(
                                     summary = result.summary
                                     currentSessionId?.let { id ->
                                         sessionManager.updateSessionSummary(id, result.summary ?: "")
+                                        if (webhookSummary && webhookUrl.isNotBlank() && result.summary != null) {
+                                            webhookClient.postSummary(webhookUrl, result.summary, id, segments.toList(), System.currentTimeMillis() - sessionStartTime)
+                                        }
                                     }
                                 }
                             }
@@ -349,6 +365,12 @@ fun HelixMicApp(
                         onEnrollmentChanged = { isVoiceEnrolled = it },
                         isConnected = connectionState == ConnectionState.CONNECTED,
                         onStartEnrollment = { currentScreen = Screen.VOICE_ENROLL },
+                        webhookUrl = webhookUrl,
+                        onWebhookUrlChange = { webhookUrl = it; sharedPrefs.edit().putString("webhook_url", it).apply() },
+                        webhookLive = webhookLive,
+                        onWebhookLiveChange = { webhookLive = it; sharedPrefs.edit().putBoolean("webhook_live_segments", it).apply() },
+                        webhookSummary = webhookSummary,
+                        onWebhookSummaryChange = { webhookSummary = it; sharedPrefs.edit().putBoolean("webhook_session_summary", it).apply() },
                         onBack = { currentScreen = Screen.MAIN }
                     )
                 }
@@ -617,9 +639,11 @@ fun HelixMicApp(
                                                     isSummarizing = false
                                                     if (result.success) {
                                                         summary = result.summary
-                                                        // Update saved session with summary
                                                         currentSessionId?.let { id ->
                                                             sessionManager.updateSessionSummary(id, result.summary ?: "")
+                                                            if (webhookSummary && webhookUrl.isNotBlank() && result.summary != null) {
+                                                                webhookClient.postSummary(webhookUrl, result.summary, id, segments.toList(), System.currentTimeMillis() - sessionStartTime)
+                                                            }
                                                         }
                                                     } else {
                                                         Toast.makeText(context, "Summary failed: ${result.error}", Toast.LENGTH_SHORT).show()
@@ -1907,6 +1931,12 @@ fun SettingsScreen(
     onEnrollmentChanged: (Boolean) -> Unit,
     isConnected: Boolean,
     onStartEnrollment: () -> Unit,
+    webhookUrl: String,
+    onWebhookUrlChange: (String) -> Unit,
+    webhookLive: Boolean,
+    onWebhookLiveChange: (Boolean) -> Unit,
+    webhookSummary: Boolean,
+    onWebhookSummaryChange: (Boolean) -> Unit,
     onBack: () -> Unit
 ) {
     var showKey by remember { mutableStateOf(false) }
@@ -2154,6 +2184,80 @@ fun SettingsScreen(
                             Text("CLEAR", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
                         }
                     }
+                }
+            }
+
+            // ── INTEGRATIONS ──
+            item { Spacer(modifier = Modifier.height(28.dp)) }
+            item { SectionHeader("INTEGRATIONS") }
+            item {
+                Text(
+                    "POST transcripts and summaries to an external endpoint.",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextMuted,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+            item {
+                Text("WEBHOOK URL", fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextMuted, letterSpacing = 2.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = webhookUrl,
+                    onValueChange = onWebhookUrlChange,
+                    placeholder = { Text("https://example.com/webhook", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextMuted) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(0.5.dp, HelixTheme.BorderDefault, HelixTheme.SharpShape),
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = HelixTheme.TextPrimary),
+                    colors = inputColors,
+                    shape = HelixTheme.SharpShape
+                )
+            }
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onWebhookLiveChange(!webhookLive) }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("SEND LIVE SEGMENTS", fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextSecondary, letterSpacing = 2.sp)
+                        Text("POST each transcript segment as it's recognized.", fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextMuted)
+                    }
+                    Text(
+                        if (webhookLive) "ON" else "OFF",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (webhookLive) HelixTheme.Connected else HelixTheme.TextMuted,
+                        letterSpacing = 2.sp
+                    )
+                }
+            }
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onWebhookSummaryChange(!webhookSummary) }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("SEND SESSION SUMMARY", fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextSecondary, letterSpacing = 2.sp)
+                        Text("POST summary when session ends.", fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextMuted)
+                    }
+                    Text(
+                        if (webhookSummary) "ON" else "OFF",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (webhookSummary) HelixTheme.Connected else HelixTheme.TextMuted,
+                        letterSpacing = 2.sp
+                    )
                 }
             }
 
