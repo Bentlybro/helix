@@ -26,6 +26,6 @@ object WhisperNative {
     }
 
     external fun nativeInit(modelPath: String): Long
-    external fun nativeTranscribe(handle: Long, pcm: FloatArray): String
+    external fun nativeTranscribe(handle: Long, pcm: FloatArray, language: String = "en"): String
     external fun nativeFree(handle: Long)
 }

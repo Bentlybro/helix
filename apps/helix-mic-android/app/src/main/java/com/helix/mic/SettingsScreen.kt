@@ -56,6 +56,8 @@ fun SettingsScreen(
     onWebhookLiveChange: (Boolean) -> Unit,
     webhookSummary: Boolean,
     onWebhookSummaryChange: (Boolean) -> Unit,
+    transcriptionLanguage: String,
+    onLanguageChange: (String) -> Unit,
     onBack: () -> Unit
 ) {
     var showKey by remember { mutableStateOf(false) }
@@ -127,8 +129,66 @@ fun SettingsScreen(
         // ── TAB 0: GENERAL ──
         if (settingsTab == 0) {
 
+            // Language
+            item {
+                SectionHeader("LANGUAGE")
+                Spacer(modifier = Modifier.height(8.dp))
+                val languages = listOf(
+                    "en" to "ENGLISH",
+                    "auto" to "AUTO-DETECT",
+                    "es" to "SPANISH",
+                    "fr" to "FRENCH",
+                    "de" to "GERMAN",
+                    "it" to "ITALIAN",
+                    "pt" to "PORTUGUESE",
+                    "nl" to "DUTCH",
+                    "ja" to "JAPANESE",
+                    "ko" to "KOREAN",
+                    "zh" to "CHINESE",
+                    "ar" to "ARABIC",
+                    "ru" to "RUSSIAN",
+                    "hi" to "HINDI",
+                    "pl" to "POLISH",
+                    "tr" to "TURKISH",
+                    "sv" to "SWEDISH",
+                    "uk" to "UKRAINIAN"
+                )
+                languages.chunked(3).forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        row.forEach { (code, label) ->
+                            val selected = transcriptionLanguage == code
+                            Text(
+                                label,
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = if (selected) HelixTheme.TextPrimary else HelixTheme.TextMuted,
+                                letterSpacing = 1.sp,
+                                modifier = Modifier
+                                    .border(0.5.dp, if (selected) HelixTheme.TextPrimary else HelixTheme.Hairline)
+                                    .clickable { onLanguageChange(code) }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                if (transcriptionLanguage != "en" && transcriptionLanguage != "auto") {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Non-English requires a multilingual model (BASE/SMALL Q5 Multi).",
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.RecordingRed
+                    )
+                }
+            }
+
             // API Key
             item {
+                Spacer(modifier = Modifier.height(20.dp))
                 SectionHeader("API KEY")
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -309,11 +369,13 @@ fun SettingsScreen(
                         BackendOption(
                             label = m.label,
                             subtitle = when (m) {
-                                WhisperModel.TINY_EN -> "Fastest. Lowest accuracy."
-                                WhisperModel.BASE_EN_Q5 -> "Quantized. Fast + accurate."
-                                WhisperModel.BASE_EN -> "Full precision. Larger download."
-                                WhisperModel.SMALL_EN_Q5 -> "Best quality. Quantized."
-                                WhisperModel.SMALL_EN -> "Best quality. Full precision."
+                                WhisperModel.TINY_EN -> "Fastest. English only."
+                                WhisperModel.BASE_EN_Q5 -> "Fast + accurate. English only."
+                                WhisperModel.BASE_EN -> "Full precision. English only."
+                                WhisperModel.SMALL_EN_Q5 -> "Best quality. English only."
+                                WhisperModel.SMALL_EN -> "Best quality. English only."
+                                WhisperModel.BASE_Q5 -> "Fast + accurate. All languages."
+                                WhisperModel.SMALL_Q5 -> "Best quality. All languages."
                             },
                             selected = onDeviceModel == m,
                             onClick = { onOnDeviceModelChange(m) }

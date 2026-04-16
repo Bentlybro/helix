@@ -24,7 +24,8 @@ import java.nio.ByteOrder
 class WhisperCppClient(
     private val context: Context,
     private val model: WhisperModel,
-    private val modelManager: WhisperModelManager
+    private val modelManager: WhisperModelManager,
+    private val language: String = "en"
 ) : TranscriptionBackend {
 
     companion object {
@@ -256,7 +257,7 @@ class WhisperCppClient(
         if (h == 0L) { Log.w(TAG, "transcribeChunk: no whisper handle"); return }
         val startMs = System.currentTimeMillis()
         try {
-            val text = WhisperNative.nativeTranscribe(h, audio).trim()
+            val text = WhisperNative.nativeTranscribe(h, audio, language).trim()
             val elapsed = System.currentTimeMillis() - startMs
             if (text.isNotEmpty()) {
                 val segment = TranscriptSegment(

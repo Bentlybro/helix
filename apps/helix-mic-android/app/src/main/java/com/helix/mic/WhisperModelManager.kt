@@ -16,13 +16,16 @@ enum class WhisperModel(
     val id: String,
     val fileName: String,
     val approxMb: Int,
-    val label: String
+    val label: String,
+    val englishOnly: Boolean = true
 ) {
     TINY_EN("tiny.en", "ggml-tiny.en.bin", 39, "TINY.EN (39 MB)"),
     BASE_EN_Q5("base.en-q5", "ggml-base.en-q5_1.bin", 60, "BASE.EN Q5 (60 MB)"),
     BASE_EN("base.en", "ggml-base.en.bin", 142, "BASE.EN F16 (142 MB)"),
     SMALL_EN_Q5("small.en-q5", "ggml-small.en-q5_1.bin", 190, "SMALL.EN Q5 (190 MB)"),
-    SMALL_EN("small.en", "ggml-small.en.bin", 466, "SMALL.EN F16 (466 MB)");
+    SMALL_EN("small.en", "ggml-small.en.bin", 466, "SMALL.EN F16 (466 MB)"),
+    BASE_Q5("base-q5", "ggml-base-q5_1.bin", 60, "BASE Q5 Multi (60 MB)", englishOnly = false),
+    SMALL_Q5("small-q5", "ggml-small-q5_1.bin", 190, "SMALL Q5 Multi (190 MB)", englishOnly = false);
 
     val downloadUrl: String
         get() = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$fileName"

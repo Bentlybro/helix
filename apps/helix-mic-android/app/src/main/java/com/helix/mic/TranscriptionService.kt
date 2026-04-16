@@ -10,7 +10,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 
-class TranscriptionService(private val apiKey: String) : TranscriptionBackend {
+class TranscriptionService(private val apiKey: String, private val language: String = "en") : TranscriptionBackend {
 
     companion object {
         private const val TAG = "TranscriptionService"
@@ -183,7 +183,7 @@ class TranscriptionService(private val apiKey: String) : TranscriptionBackend {
                 put("input_audio_format", "pcm16")
                 put("input_audio_transcription", JSONObject().apply {
                     put("model", "gpt-4o-mini-transcribe")
-                    put("language", "en")
+                    put("language", language)
                 })
                 put("turn_detection", JSONObject().apply {
                     put("type", "server_vad")

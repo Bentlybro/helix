@@ -107,6 +107,7 @@ fun HelixMicApp(
     var webhookLive by remember { mutableStateOf(sharedPrefs.getBoolean("webhook_live_segments", false)) }
     var webhookSummary by remember { mutableStateOf(sharedPrefs.getBoolean("webhook_session_summary", false)) }
     val webhookClient = remember { WebhookClient() }
+    var transcriptionLanguage by remember { mutableStateOf(sharedPrefs.getString("transcription_language", "en") ?: "en") }
 
     var isRecording by remember { mutableStateOf(false) }
     var currentSessionId by remember { mutableStateOf<String?>(null) }
@@ -123,14 +124,14 @@ fun HelixMicApp(
 
     val whisperModelManager = remember { WhisperModelManager(context) }
 
-    val openAiService = remember(apiKey) {
+    val openAiService = remember(apiKey, transcriptionLanguage) {
         if (apiKey.isNotBlank()) {
-            TranscriptionService(apiKey).also { it.voiceProfileManager = voiceProfileManager }
+            TranscriptionService(apiKey, transcriptionLanguage).also { it.voiceProfileManager = voiceProfileManager }
         } else null
     }
     val localServerClient = remember(serverUrl) { LocalServerClient(serverUrl) }
-    val whisperClient = remember(onDeviceModel) {
-        WhisperCppClient(context, onDeviceModel, whisperModelManager)
+    val whisperClient = remember(onDeviceModel, transcriptionLanguage) {
+        WhisperCppClient(context, onDeviceModel, whisperModelManager, transcriptionLanguage)
     }
 
     DisposableEffect(Unit) {
@@ -306,6 +307,8 @@ fun HelixMicApp(
                         onWebhookLiveChange = { webhookLive = it; sharedPrefs.edit().putBoolean("webhook_live_segments", it).apply() },
                         webhookSummary = webhookSummary,
                         onWebhookSummaryChange = { webhookSummary = it; sharedPrefs.edit().putBoolean("webhook_session_summary", it).apply() },
+                        transcriptionLanguage = transcriptionLanguage,
+                        onLanguageChange = { transcriptionLanguage = it; sharedPrefs.edit().putString("transcription_language", it).apply() },
                         onBack = { currentScreen = Screen.MAIN }
                     )
                 }

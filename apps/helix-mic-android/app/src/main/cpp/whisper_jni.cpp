@@ -41,7 +41,7 @@ Java_com_helix_mic_WhisperNative_nativeInit(JNIEnv* env, jobject /*thiz*/, jstri
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_helix_mic_WhisperNative_nativeTranscribe(JNIEnv* env, jobject /*thiz*/, jlong handle, jfloatArray jpcm) {
+Java_com_helix_mic_WhisperNative_nativeTranscribe(JNIEnv* env, jobject /*thiz*/, jlong handle, jfloatArray jpcm, jstring jlang) {
     if (handle == 0) return env->NewStringUTF("");
     whisper_context* ctx = reinterpret_cast<whisper_context*>(handle);
 
@@ -51,17 +51,21 @@ Java_com_helix_mic_WhisperNative_nativeTranscribe(JNIEnv* env, jobject /*thiz*/,
     std::vector<float> pcm(len);
     env->GetFloatArrayRegion(jpcm, 0, len, pcm.data());
 
+    // Language: "auto" for detection, or ISO code like "en", "es", "fr"
+    const char* lang_c = jlang ? env->GetStringUTFChars(jlang, nullptr) : nullptr;
+    std::string lang = (lang_c && strlen(lang_c) > 0) ? std::string(lang_c) : "en";
+    if (lang_c) env->ReleaseStringUTFChars(jlang, lang_c);
+
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.print_realtime   = false;
     params.print_progress   = false;
     params.print_timestamps = false;
     params.print_special    = false;
     params.translate        = false;
-    // We feed pre-segmented chunks from the VAD — whisper doesn't need to split further.
     params.single_segment   = true;
     params.no_context       = true;
     params.suppress_blank   = true;
-    params.language         = "en";
+    params.language         = lang == "auto" ? "auto" : lang.c_str();
     params.n_threads        = 6;
     params.temperature      = 0.0f;
     // Cap the number of decoder steps. base.en shouldn't need more than this for short chunks.
