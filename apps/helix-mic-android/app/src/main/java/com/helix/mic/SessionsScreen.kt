@@ -508,28 +508,34 @@ fun SessionDetailScreen(
 
         // Delete button at bottom
         HairlineDivider()
-        OutlinedButton(
-            onClick = {
-                sessionManager.deleteSession(session.id)
-                Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
-                onDeleted()
-            },
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp)
-                .navigationBarsPadding()
-                .height(40.dp),
-            shape = HelixTheme.SharpShape,
-            border = BorderStroke(0.5.dp, HelixTheme.RecordingRed.copy(alpha = 0.5f)),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.RecordingRed)
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                "DELETE SESSION",
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Light,
-                letterSpacing = 3.sp
-            )
+            OutlinedButton(
+                onClick = { SessionExporter.shareSession(context, session) },
+                modifier = Modifier.weight(1f).height(40.dp),
+                shape = HelixTheme.SharpShape,
+                border = BorderStroke(0.5.dp, HelixTheme.TextSecondary),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextPrimary)
+            ) {
+                Text("EXPORT", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 3.sp)
+            }
+            OutlinedButton(
+                onClick = {
+                    sessionManager.deleteSession(session.id)
+                    Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
+                    onDeleted()
+                },
+                modifier = Modifier.weight(1f).height(40.dp),
+                shape = HelixTheme.SharpShape,
+                border = BorderStroke(0.5.dp, HelixTheme.RecordingRed.copy(alpha = 0.5f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.RecordingRed)
+            ) {
+                Text("DELETE", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 3.sp)
+            }
         }
     }
 }
