@@ -1,12 +1,9 @@
 /*
  * Helix-Mic - BLE Transport Implementation
  *
- * Rewritten to fix hard-fault crash ~5s after BLE connection.
- * Root cause: missing PHY update, data length extension, and MTU exchange
- * on connect, plus insufficient stack sizes for BLE operations.
- *
- * This version uses dynamic GATT service registration and negotiates
- * PHY 2M, max data length, and MTU immediately on connection.
+ * Dynamic GATT service with audio streaming and battery notifications.
+ * Android client drives link negotiation (MTU, PHY, DLE) to avoid
+ * races on NCS v3.2.4.
  */
 
 #include <zephyr/logging/log.h>
@@ -160,50 +157,6 @@ static struct bt_gatt_service helix_svc = BT_GATT_SERVICE(helix_attrs);
 #define AUDIO_ATTR_IDX   2
 #define BATTERY_ATTR_IDX 5
 
-/* ─── Connection parameter negotiation ──────────────────────────────── */
-
-static void update_phy(struct bt_conn *conn)
-{
-    int err = bt_conn_le_phy_update(conn, BT_CONN_LE_PHY_PARAM_2M);
-    if (err) {
-        LOG_WRN("PHY update request failed: %d", err);
-    }
-}
-
-static void update_data_length(struct bt_conn *conn)
-{
-    struct bt_conn_le_data_len_param param = {
-        .tx_max_len  = BT_GAP_DATA_LEN_MAX,
-        .tx_max_time = BT_GAP_DATA_TIME_MAX,
-    };
-    int err = bt_conn_le_data_len_update(conn, &param);
-    if (err) {
-        LOG_WRN("Data length update failed: %d", err);
-    }
-}
-
-static struct bt_gatt_exchange_params exchange_params;
-
-static void exchange_func(struct bt_conn *conn, uint8_t att_err,
-                          struct bt_gatt_exchange_params *params)
-{
-    if (!att_err) {
-        current_mtu = bt_gatt_get_mtu(conn);
-        LOG_INF("MTU exchanged: %u", current_mtu);
-    } else {
-        LOG_WRN("MTU exchange error: %u", att_err);
-    }
-}
-
-static void update_mtu(struct bt_conn *conn)
-{
-    exchange_params.func = exchange_func;
-    int err = bt_gatt_exchange_mtu(conn, &exchange_params);
-    if (err) {
-        LOG_WRN("MTU exchange request failed: %d", err);
-    }
-}
-
 /* ─── Advertising ───────────────────────────────────────────────────── */
 
 static const struct bt_data ad[] = {
@@ -228,11 +181,6 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
     current_conn = bt_conn_ref(conn);
     is_connected = true;
-
-    /* Let the Android client drive ALL link negotiation (MTU, PHY, DLE).
-     * Initiating PHY/DLE from firmware while the client sends an MTU
-     * request races on NCS v3.2.4 and deadlocks the ATT layer, preventing
-     * service discovery (status=22 timeout after ~30s). */
 
     LOG_INF("Waiting for client to subscribe before streaming");
 }
@@ -262,25 +210,9 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     }
 }
 
-static void le_phy_updated(struct bt_conn *conn,
-                           struct bt_conn_le_phy_info *param)
-{
-    LOG_INF("PHY updated: TX=%u RX=%u", param->tx_phy, param->rx_phy);
-}
-
-static void le_data_len_updated(struct bt_conn *conn,
-                                struct bt_conn_le_data_len_info *info)
-{
-    LOG_INF("Data length updated: TX len=%u time=%u, RX len=%u time=%u",
-            info->tx_max_len, info->tx_max_time,
-            info->rx_max_len, info->rx_max_time);
-}
-
 BT_CONN_CB_DEFINE(conn_callbacks) = {
-    .connected        = connected,
-    .disconnected     = disconnected,
-    .le_phy_updated   = le_phy_updated,
-    .le_data_len_updated = le_data_len_updated,
+    .connected    = connected,
+    .disconnected = disconnected,
 };
 
 /* ─── Public API ────────────────────────────────────────────────────── */

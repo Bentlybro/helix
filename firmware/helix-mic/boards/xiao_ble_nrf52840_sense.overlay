@@ -2,6 +2,8 @@
 /* Board DTS already sets correct PDM pins (CLK=P1.0, DIN=P0.16) and pinctrl. */
 
 #include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
 
 / {
 	msm261d3526hicpm_c_en: msm261d3526hicpm-c-en {
@@ -19,4 +21,5 @@ dmic_dev: &pdm0 {
 
 &adc {
 	status = "okay";
+	/delete-property/ zephyr,pm-device-runtime-auto;
 };

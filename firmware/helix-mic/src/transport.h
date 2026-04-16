@@ -1,8 +1,8 @@
 /*
  * Helix-Mic - BLE Transport Layer
  *
- * Rewritten to fix BLE connection crash on nRF52840.
- * Uses dynamic service registration, PHY/DLE/MTU negotiation on connect.
+ * Dynamic GATT service with audio streaming and battery notifications.
+ * Client drives link negotiation (MTU, PHY, DLE).
  */
 
 #ifndef TRANSPORT_H

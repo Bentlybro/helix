@@ -14,52 +14,50 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #include <zephyr/device.h>
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
-#include <hal/nrf_saadc.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
 #include <zephyr/sys/ring_buffer.h>
-
 
 #include "mic.h"
 #include "codec.h"
 #include "transport.h"
 #include "led.h"
 
-/* Battery ADC configuration - use node label directly */
-#define BATTERY_ADC_NODE DT_NODELABEL(adc)
+/* ─── Battery ADC (matches Tjoms99/xiao_sense_nrf52840_battery_lib) ─── */
+#define BATTERY_ADC_CHANNEL  7
+#define BATTERY_ADC_GAIN     ADC_GAIN_1_6    /* 0.6V ref × 6 = 3.6V range */
+#define BATTERY_ADC_REF      ADC_REF_INTERNAL
+#define BATTERY_ADC_RES      12
+#define BATTERY_R1           1037  /* kΩ (calibrated from nominal 1MΩ) */
+#define BATTERY_R2           510   /* kΩ */
+#define BATTERY_MIN_MV       3300
+#define BATTERY_MAX_MV       4200
 
-/* Battery voltage divider: full charge ~4.2V, empty ~3.3V */
-/* ADC: 0.6V internal ref, 1/4 gain → 2.4V range, 12-bit (0-4095) */
-/* XIAO nRF52840: 1/2 voltage divider on battery, enable via P0.14 */
-#define BATTERY_ADC_CHANNEL   7   /* AIN7 = P0.31 on nRF52840 */
-#define BATTERY_ADC_MAX       4095
-#define BATTERY_ADC_RANGE_MV  2400  /* 0.6V ref * 4 (1/4 gain) = 2.4V */
-#define BATTERY_DIVIDER       2     /* Multiply ADC reading by 2 for actual voltage */
-#define BATTERY_MIN_MV        3200  /* LP502030 empty */
-#define BATTERY_MAX_MV        4200  /* LP502030 full */
+static const struct device *adc_dev = DEVICE_DT_GET(DT_NODELABEL(adc));
 
-static const struct device *adc_dev;
-
-/* Battery enable pin: P0.14 on XIAO nRF52840 */
-static const struct gpio_dt_spec bat_en = {
+/* P0.14 read-enable: ACTIVE_LOW per Seeed schematic */
+static const struct gpio_dt_spec bat_read_en = {
     .port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
     .pin = 14,
-    .dt_flags = GPIO_ACTIVE_HIGH,
+    .dt_flags = GPIO_ACTIVE_LOW,
+};
+
+static struct adc_channel_cfg adc_cfg = {
+    .gain             = BATTERY_ADC_GAIN,
+    .reference        = BATTERY_ADC_REF,
+    .acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40),
+    .channel_id       = BATTERY_ADC_CHANNEL,
+#if defined(CONFIG_ADC_NRFX_SAADC)
+    .input_positive   = NRF_SAADC_AIN7,
+#endif
 };
 
 static int16_t adc_buffer;
 static struct adc_sequence adc_seq = {
-    .buffer = &adc_buffer,
+    .channels    = BIT(BATTERY_ADC_CHANNEL),
+    .buffer      = &adc_buffer,
     .buffer_size = sizeof(adc_buffer),
-};
-
-static struct adc_channel_cfg adc_cfg = {
-    .gain = ADC_GAIN_1_4,       /* 1/4 gain — maps 0-3.6V*4=14.4V range, good for divider */
-    .reference = ADC_REF_INTERNAL,  /* 0.6V internal ref */
-    .acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10),
-    .channel_id = BATTERY_ADC_CHANNEL,
-    .differential = 0,
-#if defined(CONFIG_ADC_NRFX_SAADC)
-    .input_positive = SAADC_CH_PSELP_PSELP_AnalogInput7,  /* AIN7 = P0.31 */
-#endif
+    .resolution  = BATTERY_ADC_RES,
 };
 
 /* Forward declarations */
@@ -303,75 +301,58 @@ static void connection_changed(bool connected)
 static int init_battery_adc(void)
 {
     int ret;
-    
-    adc_dev = DEVICE_DT_GET(BATTERY_ADC_NODE);
+
     if (!device_is_ready(adc_dev)) {
         LOG_ERR("ADC device not ready");
         return -ENODEV;
     }
-    
-    /* Enable battery measurement circuit — P0.14 HIGH to activate divider */
-    if (device_is_ready(bat_en.port)) {
-        ret = gpio_pin_configure(bat_en.port, bat_en.pin, GPIO_OUTPUT_ACTIVE);
-        if (ret < 0) {
-            LOG_WRN("Battery enable pin config failed: %d", ret);
-        } else {
-            gpio_pin_set(bat_en.port, bat_en.pin, 1);
-            LOG_INF("Battery divider enabled (P0.14)");
-        }
-    } else {
-        LOG_WRN("GPIO0 not ready for battery enable");
-    }
-    
-    /* Configure ADC channel */
+
     ret = adc_channel_setup(adc_dev, &adc_cfg);
     if (ret < 0) {
         LOG_ERR("ADC channel setup failed: %d", ret);
         return ret;
     }
-    
-    adc_seq.channels = BIT(BATTERY_ADC_CHANNEL);
-    adc_seq.resolution = 12;  /* 12-bit ADC */
-    
+    LOG_INF("ADC channel 7 configured");
+
+    /* Enable battery voltage divider — GPIO_ACTIVE_LOW so logical 1 = pin LOW */
+    if (!device_is_ready(bat_read_en.port)) {
+        LOG_ERR("GPIO0 not ready for battery enable");
+        return -ENODEV;
+    }
+
+    ret = gpio_pin_configure_dt(&bat_read_en, GPIO_OUTPUT_ACTIVE);
+    if (ret < 0) {
+        LOG_ERR("Battery read-enable pin config failed: %d", ret);
+        return ret;
+    }
+
     return 0;
 }
 
 static uint8_t read_battery_level(uint16_t *out_mv)
 {
-    int ret;
     if (out_mv) *out_mv = 0;
-    int32_t mv;
-    uint8_t percent;
-    
-    if (!device_is_ready(adc_dev)) {
-        LOG_WRN("Battery ADC device not ready");
-        return 0xFF;  /* Sentinel: unknown */
-    }
 
-    ret = adc_read(adc_dev, &adc_seq);
+    int ret = adc_read(adc_dev, &adc_seq);
     if (ret < 0) {
-        LOG_WRN("Battery adc_read failed: %d", ret);
+        LOG_WRN("adc_read failed: %d", ret);
         return 0xFF;
     }
-    
-    /* Convert ADC value to millivolts */
-    mv = adc_buffer;
-    /* ADC reading → pin voltage → battery voltage */
-    mv = (mv * BATTERY_ADC_RANGE_MV) / BATTERY_ADC_MAX;  /* Pin voltage in mV */
-    const int pin_mv = mv;
-    mv = mv * BATTERY_DIVIDER;  /* Actual battery voltage (divider is 1/2) */
-    LOG_INF("Battery ADC: raw=%d, pin_mv=%d, bat_mv=%d", adc_buffer, pin_mv, mv);
 
-    if (out_mv) *out_mv = (uint16_t)mv;
-
-    /* Convert to percentage */
-    if (mv <= BATTERY_MIN_MV) {
-        percent = 0;
-    } else if (mv >= BATTERY_MAX_MV) {
-        percent = 100;
-    } else {
-        percent = ((mv - BATTERY_MIN_MV) * 100) / (BATTERY_MAX_MV - BATTERY_MIN_MV);
+    /* Convert raw → millivolts at the ADC pin */
+    int32_t adc_mv = adc_buffer;
+    ret = adc_raw_to_millivolts(adc_ref_internal(adc_dev),
+                                BATTERY_ADC_GAIN, BATTERY_ADC_RES, &adc_mv);
+    if (ret < 0) {
+        return 0xFF;
     }
 
-    return percent;
+    /* Scale through voltage divider to get actual battery voltage */
+    uint32_t bat_mv = (uint32_t)adc_mv * (BATTERY_R1 + BATTERY_R2) / BATTERY_R2;
+
+    if (out_mv) *out_mv = (uint16_t)bat_mv;
+
+    if (bat_mv <= BATTERY_MIN_MV) return 0;
+    if (bat_mv >= BATTERY_MAX_MV) return 100;
+    return (uint8_t)(((bat_mv - BATTERY_MIN_MV) * 100) / (BATTERY_MAX_MV - BATTERY_MIN_MV));
 }
