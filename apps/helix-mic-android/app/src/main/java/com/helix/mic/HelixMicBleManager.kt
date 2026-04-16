@@ -79,6 +79,11 @@ class HelixMicBleManager(private val context: Context) {
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState
 
+    // Auto-reconnect state
+    @Volatile private var autoReconnect = false
+    private var reconnectAttempt = 0
+    private val reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     private val _deviceAddress = MutableStateFlow<String?>(null)
     val deviceAddress: StateFlow<String?> = _deviceAddress
 
@@ -132,16 +137,27 @@ class HelixMicBleManager(private val context: Context) {
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                reconnectAttempt = 0
                 this@HelixMicBleManager.gatt = gatt
                 gatt.requestMtu(247)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                _connectionState.value = ConnectionState.DISCONNECTED
-                _deviceAddress.value = null
-                _batteryPercent.value = null
-                _isReceivingAudio.value = false
+                gatt?.close()
                 this@HelixMicBleManager.gatt = null
                 gattQueue.clear()
                 gattBusy = false
+                _batteryPercent.value = null
+                _isReceivingAudio.value = false
+
+                if (autoReconnect) {
+                    val delayMs = minOf(1000L * (1 shl minOf(reconnectAttempt, 5)), 30_000L)
+                    reconnectAttempt++
+                    Log.d("HelixMic", "Auto-reconnect attempt $reconnectAttempt in ${delayMs}ms")
+                    _connectionState.value = ConnectionState.SCANNING
+                    reconnectHandler.postDelayed({ startScan() }, delayMs)
+                } else {
+                    _connectionState.value = ConnectionState.DISCONNECTED
+                    _deviceAddress.value = null
+                }
             }
         }
 
@@ -257,6 +273,8 @@ class HelixMicBleManager(private val context: Context) {
     }
 
     fun startScan() {
+        autoReconnect = true
+        reconnectAttempt = 0
         _connectionState.value = ConnectionState.SCANNING
         val filter = ScanFilter.Builder()
             .setDeviceName(DEVICE_NAME)
@@ -268,6 +286,8 @@ class HelixMicBleManager(private val context: Context) {
     }
 
     fun disconnect() {
+        autoReconnect = false
+        reconnectHandler.removeCallbacksAndMessages(null)
         gatt?.disconnect()
         gatt?.close()
         gatt = null
