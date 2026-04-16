@@ -19,7 +19,6 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #include <zephyr/sys/ring_buffer.h>
 
 #include "mic.h"
-#include "codec.h"
 #include "transport.h"
 #include "led.h"
 
@@ -150,11 +149,7 @@ int main(void)
         return ret;
     }
     
-    ret = codec_init();
-    if (ret < 0) {
-        LOG_ERR("Codec init failed: %d", ret);
-        return ret;
-    }
+
     
     ret = transport_init();
     if (ret < 0) {

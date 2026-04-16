@@ -7,7 +7,6 @@ project(helix-mic)
 target_sources(app PRIVATE
     src/main.c
     src/mic.c
-    src/codec.c
     src/transport.c
     src/led.c
 )

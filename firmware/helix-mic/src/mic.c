@@ -32,8 +32,6 @@ static volatile bool mic_running;
 /* Read timeout in ms */
 #define READ_TIMEOUT_MS 1000
 
-/* Software gain multiplier (Omi uses hardware gain 64 ≈ 4x our default) */
-#define SOFTWARE_GAIN_SHIFT 2  /* Multiply by 4 */
 
 static void mic_reader_entry(void *p1, void *p2, void *p3)
 {
