@@ -14,7 +14,8 @@ data class Session(
     val transcript: List<TranscriptSegment>,
     val summary: String?,
     val title: String? = null,
-    val hasAudio: Boolean = false
+    val hasAudio: Boolean = false,
+    val backendType: String? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -23,6 +24,7 @@ data class Session(
         put("summary", summary ?: JSONObject.NULL)
         put("title", title ?: JSONObject.NULL)
         put("hasAudio", hasAudio)
+        put("backendType", backendType ?: JSONObject.NULL)
         put("transcript", JSONArray().apply {
             transcript.forEach { seg ->
                 put(JSONObject().apply {
@@ -30,6 +32,8 @@ data class Session(
                     put("timestamp", seg.timestamp)
                     put("durationMs", seg.durationMs)
                     put("speaker", seg.speaker ?: JSONObject.NULL)
+                    put("inferenceMs", seg.inferenceMs)
+                    put("backendType", seg.backendType ?: JSONObject.NULL)
                 })
             }
         })
@@ -44,7 +48,9 @@ data class Session(
                     text = seg.getString("text"),
                     timestamp = seg.getLong("timestamp"),
                     durationMs = seg.optLong("durationMs", 0L),
-                    speaker = if (seg.has("speaker") && !seg.isNull("speaker")) seg.getString("speaker") else null
+                    speaker = if (seg.has("speaker") && !seg.isNull("speaker")) seg.getString("speaker") else null,
+                    inferenceMs = seg.optLong("inferenceMs", 0L),
+                    backendType = if (seg.has("backendType") && !seg.isNull("backendType")) seg.getString("backendType") else null
                 )
             }
             return Session(
@@ -54,7 +60,8 @@ data class Session(
                 transcript = segments,
                 summary = if (json.isNull("summary")) null else json.getString("summary"),
                 title = if (json.has("title") && !json.isNull("title")) json.getString("title") else null,
-                hasAudio = json.optBoolean("hasAudio", false)
+                hasAudio = json.optBoolean("hasAudio", false),
+                backendType = if (json.has("backendType") && !json.isNull("backendType")) json.getString("backendType") else null
             )
         }
     }
@@ -83,7 +90,8 @@ class SessionManager(
         sessionId: String,
         transcript: List<TranscriptSegment>,
         summary: String? = null,
-        hasAudio: Boolean = false
+        hasAudio: Boolean = false,
+        backendType: String? = null
     ): Session {
         val session = Session(
             id = sessionId,
@@ -91,7 +99,8 @@ class SessionManager(
             endTime = System.currentTimeMillis(),
             transcript = transcript,
             summary = summary,
-            hasAudio = hasAudio
+            hasAudio = hasAudio,
+            backendType = backendType
         )
         saveSession(session)
         Log.d(TAG, "Session $sessionId saved (${transcript.size} segments, audio=$hasAudio)")

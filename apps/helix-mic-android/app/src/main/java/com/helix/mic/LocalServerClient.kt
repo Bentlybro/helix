@@ -35,6 +35,7 @@ class LocalServerClient(private val serverUrl: String) : TranscriptionBackend {
     private var webSocket: WebSocket? = null
     private var active = false
     private var reconnectAttempts = 0
+    private var partialStartMs = 0L
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -126,6 +127,9 @@ class LocalServerClient(private val serverUrl: String) : TranscriptionBackend {
                 "partial" -> {
                     val partialStr = json.optString("text", "")
                     if (partialStr.isNotEmpty()) {
+                        if (_partialText.value.isEmpty()) {
+                            partialStartMs = System.currentTimeMillis()
+                        }
                         _partialText.value = partialStr
                     }
                 }
@@ -136,20 +140,28 @@ class LocalServerClient(private val serverUrl: String) : TranscriptionBackend {
                         val speaker = if (json.has("speaker") && !json.isNull("speaker")) {
                             json.getString("speaker")
                         } else null
+                        val serverMs = json.optLong("processing_ms", 0L)
+                        val elapsed = if (serverMs > 0L) serverMs
+                            else if (partialStartMs > 0L) System.currentTimeMillis() - partialStartMs
+                            else 0L
 
                         val segment = TranscriptSegment(
                             text = transcript,
                             timestamp = System.currentTimeMillis(),
-                            speaker = speaker
+                            speaker = speaker,
+                            inferenceMs = elapsed,
+                            backendType = "LOCAL"
                         )
                         _segments.value = _segments.value + segment
-                        Log.d(TAG, "Final [${speaker ?: "?"}]: $transcript")
+                        Log.d(TAG, "Final [${speaker ?: "?"}] (${elapsed}ms): $transcript")
                     }
                     _partialText.value = ""
+                    partialStartMs = 0L
                 }
 
                 "vad" -> {
                     val speaking = json.optBoolean("speaking", false)
+                    if (speaking) partialStartMs = System.currentTimeMillis()
                     Log.v(TAG, "VAD: speaking=$speaking")
                 }
 

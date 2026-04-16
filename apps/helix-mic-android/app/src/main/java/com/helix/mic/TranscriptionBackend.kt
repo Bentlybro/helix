@@ -6,7 +6,9 @@ data class TranscriptSegment(
     val text: String,
     val timestamp: Long,
     val durationMs: Long = 0L,
-    val speaker: String? = null
+    val speaker: String? = null,
+    val inferenceMs: Long = 0L,
+    val backendType: String? = null
 )
 
 enum class BackendType {
@@ -26,6 +28,12 @@ enum class BackendType {
         OPENAI_REALTIME -> "openai_realtime"
         LOCAL_SERVER -> "local_server"
         ON_DEVICE -> "on_device"
+    }
+
+    fun toLabel(): String = when (this) {
+        OPENAI_REALTIME -> "OPENAI"
+        LOCAL_SERVER -> "LOCAL"
+        ON_DEVICE -> "DEVICE"
     }
 }
 

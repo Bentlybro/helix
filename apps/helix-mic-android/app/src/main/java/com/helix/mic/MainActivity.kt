@@ -229,7 +229,7 @@ fun HelixMicApp(
                     audioRecorder = null
                     // Auto-save session
                     currentSessionId?.let { id ->
-                        sessionManager.stopSession(id, segments.toList(), null, hasAudio = savedFile != null)
+                        sessionManager.stopSession(id, segments.toList(), null, hasAudio = savedFile != null, backendType = backendType.toKey())
                         sessionSaved = true
                     }
                     val fullText = segments.joinToString(" ") { it.text }
@@ -483,7 +483,8 @@ fun HelixMicApp(
                                 batteryMillivolts = batteryMillivolts,
                                 isRecording = isRecording,
                                 elapsedSeconds = elapsedSeconds,
-                                isWsConnected = isConnected
+                                isWsConnected = isConnected,
+                                backendLabel = backendType.toLabel()
                             )
 
                             HairlineDivider()
@@ -604,7 +605,7 @@ fun HelixMicApp(
                                         audioRecorder = null
                                         // Auto-save session immediately
                                         currentSessionId?.let { id ->
-                                            sessionManager.stopSession(id, segments.toList(), null, hasAudio = savedFile != null)
+                                            sessionManager.stopSession(id, segments.toList(), null, hasAudio = savedFile != null, backendType = backendType.toKey())
                                             sessionSaved = true
                                         }
                                         val fullText = segments.joinToString(" ") { it.text }
@@ -901,7 +902,8 @@ fun StatusLine(
     batteryMillivolts: Int?,
     isRecording: Boolean,
     elapsedSeconds: Long,
-    isWsConnected: Boolean
+    isWsConnected: Boolean,
+    backendLabel: String? = null
 ) {
     Row(
         modifier = Modifier
@@ -929,6 +931,15 @@ fun StatusLine(
             fontFamily = FontFamily.Monospace,
             color = HelixTheme.TextMuted
         )
+        if (backendLabel != null) {
+            Text(
+                backendLabel,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.TextMuted,
+                letterSpacing = 1.sp
+            )
+        }
         if (isRecording) {
             Text(
                 "REC ${formatDuration(elapsedSeconds)}",
@@ -1039,7 +1050,10 @@ fun TranscriptLine(segment: TranscriptSegment) {
         SimpleDateFormat("mm:ss", Locale.getDefault()).format(Date(segment.timestamp))
     }
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
                 text = "[${timeStr}]",
                 fontSize = 11.sp,
@@ -1056,6 +1070,15 @@ fun TranscriptLine(segment: TranscriptSegment) {
                     color = HelixTheme.TextSecondary
                 )
             }
+            if (segment.inferenceMs > 0L) {
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "${"%.1f".format(segment.inferenceMs / 1000.0)}s",
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextMuted
+                )
+            }
         }
         Spacer(modifier = Modifier.height(3.dp))
         Text(
@@ -1065,6 +1088,96 @@ fun TranscriptLine(segment: TranscriptSegment) {
             color = HelixTheme.TextPrimary,
             lineHeight = 22.sp,
             modifier = Modifier.padding(start = 2.dp)
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SESSION STATS
+// ─────────────────────────────────────────────────────────────
+
+@Composable
+fun SessionStatsView(session: Session, modifier: Modifier = Modifier) {
+    val segments = session.transcript
+    val timedSegments = segments.filter { it.inferenceMs > 0L }
+
+    val totalSegments = segments.size
+    val totalAudioMs = segments.sumOf { it.durationMs }
+    val sessionDurationMs = session.endTime - session.startTime
+    val totalWords = segments.sumOf { it.text.split("\\s+".toRegex()).size }
+    val avgInferenceMs = if (timedSegments.isNotEmpty()) timedSegments.map { it.inferenceMs }.average() else 0.0
+    val minInferenceMs = timedSegments.minOfOrNull { it.inferenceMs } ?: 0L
+    val maxInferenceMs = timedSegments.maxOfOrNull { it.inferenceMs } ?: 0L
+    val wpm = if (sessionDurationMs > 0) (totalWords * 60_000.0 / sessionDurationMs) else 0.0
+    val totalInferenceMs = timedSegments.sumOf { it.inferenceMs }
+    val totalTimedAudioMs = timedSegments.sumOf { it.durationMs }
+    val rtf = if (totalTimedAudioMs > 0) totalInferenceMs.toDouble() / totalTimedAudioMs else 0.0
+
+    LazyColumn(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        if (session.backendType != null) {
+            item { StatRow("BACKEND", session.backendType.uppercase()) }
+        }
+        item { StatRow("SEGMENTS", "$totalSegments") }
+        item { StatRow("WORDS", "$totalWords") }
+        item { StatRow("SESSION", formatDuration(sessionDurationMs / 1000)) }
+        item { StatRow("AUDIO", formatDuration(totalAudioMs / 1000)) }
+        item { StatRow("WORDS / MIN", "%.1f".format(wpm)) }
+
+        if (timedSegments.isNotEmpty()) {
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "INFERENCE",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Light,
+                    color = HelixTheme.TextMuted,
+                    letterSpacing = 3.sp
+                )
+            }
+            item { StatRow("AVG", "${"%.0f".format(avgInferenceMs)} ms") }
+            item { StatRow("MIN", "$minInferenceMs ms") }
+            item { StatRow("MAX", "$maxInferenceMs ms") }
+            item { StatRow("REAL-TIME FACTOR", "%.2f".format(rtf)) }
+            item { StatRow("TIMED", "${timedSegments.size} / $totalSegments") }
+        } else {
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "NO INFERENCE TIMING DATA",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextMuted,
+                    letterSpacing = 2.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun StatRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            label,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            color = HelixTheme.TextSecondary,
+            letterSpacing = 1.sp
+        )
+        Text(
+            value,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            color = HelixTheme.TextPrimary
         )
     }
 }
@@ -1428,6 +1541,7 @@ fun SessionDetailScreen(
     var isEditing by remember { mutableStateOf(false) }
     var editTitle by remember { mutableStateOf(session.title ?: "") }
 
+    var activeTab by remember { mutableStateOf(0) }
     val audioPlayer = remember { SessionAudioPlayer() }
     val isPlaying by audioPlayer.isPlaying.collectAsState()
     val progressMs by audioPlayer.progressMs.collectAsState()
@@ -1610,86 +1724,109 @@ fun SessionDetailScreen(
             HairlineDivider()
         }
 
-        LazyColumn(
+        // Tab selector
+        Row(
             modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            if (session.summary != null) {
-                item {
-                    SummarySection(summary = session.summary, modifier = Modifier.padding(bottom = 4.dp))
-                    Spacer(modifier = Modifier.height(4.dp))
-                    OutlinedButton(
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(stripMarkdown(session.summary)))
-                            Toast.makeText(context, "Summary copied", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.height(32.dp),
-                        shape = HelixTheme.SharpShape,
-                        border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
-                    ) {
-                        Text("COPY SUMMARY", fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
+            Text(
+                "TRANSCRIPT",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Light,
+                color = if (activeTab == 0) HelixTheme.TextPrimary else HelixTheme.TextMuted,
+                letterSpacing = 2.sp,
+                modifier = Modifier.clickable { activeTab = 0 }
+            )
+            Text(
+                "STATS",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Light,
+                color = if (activeTab == 1) HelixTheme.TextPrimary else HelixTheme.TextMuted,
+                letterSpacing = 2.sp,
+                modifier = Modifier.clickable { activeTab = 1 }
+            )
+        }
+        HairlineDivider()
+
+        if (activeTab == 0) {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                if (session.summary != null) {
+                    item {
+                        SummarySection(summary = session.summary, modifier = Modifier.padding(bottom = 4.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedButton(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(stripMarkdown(session.summary)))
+                                Toast.makeText(context, "Summary copied", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.height(32.dp),
+                            shape = HelixTheme.SharpShape,
+                            border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                        ) {
+                            Text("COPY SUMMARY", fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
+                        }
                     }
                 }
-            }
 
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "TRANSCRIPT",
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Light,
-                        color = HelixTheme.TextMuted,
-                        letterSpacing = 3.sp,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            val fullTranscript = session.transcript.joinToString("\n") { seg ->
-                                val time = SimpleDateFormat("mm:ss", Locale.getDefault()).format(Date(seg.timestamp))
-                                val speaker = if (seg.speaker != null) " [${seg.speaker}]" else ""
-                                "[$time]$speaker ${seg.text}"
-                            }
-                            clipboardManager.setText(AnnotatedString(fullTranscript))
-                            Toast.makeText(context, "Transcript copied", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.height(32.dp),
-                        shape = HelixTheme.SharpShape,
-                        border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("COPY TRANSCRIPT", fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
+                        OutlinedButton(
+                            onClick = {
+                                val fullTranscript = session.transcript.joinToString("\n") { seg ->
+                                    val time = SimpleDateFormat("mm:ss", Locale.getDefault()).format(Date(seg.timestamp))
+                                    val speaker = if (seg.speaker != null) " [${seg.speaker}]" else ""
+                                    "[$time]$speaker ${seg.text}"
+                                }
+                                clipboardManager.setText(AnnotatedString(fullTranscript))
+                                Toast.makeText(context, "Transcript copied", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.height(32.dp),
+                            shape = HelixTheme.SharpShape,
+                            border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                        ) {
+                            Text("COPY TRANSCRIPT", fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 2.sp)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    HairlineDivider()
+                }
+
+                items(session.transcript) { segment ->
+                    TranscriptLine(segment)
+                }
+
+                if (session.transcript.isEmpty()) {
+                    item {
+                        Text(
+                            "No transcript recorded",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = HelixTheme.TextMuted
+                        )
                     }
                 }
-                Spacer(modifier = Modifier.height(6.dp))
-                HairlineDivider()
-            }
 
-            items(session.transcript) { segment ->
-                TranscriptLine(segment)
+                item { Spacer(modifier = Modifier.height(16.dp)) }
             }
-
-            if (session.transcript.isEmpty()) {
-                item {
-                    Text(
-                        "No transcript recorded",
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = HelixTheme.TextMuted
-                    )
-                }
-            }
-
-            item { Spacer(modifier = Modifier.height(16.dp)) }
+        } else {
+            SessionStatsView(session = session, modifier = Modifier.weight(1f))
         }
 
         // Delete button at bottom

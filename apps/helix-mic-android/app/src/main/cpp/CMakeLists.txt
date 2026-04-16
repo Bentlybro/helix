@@ -22,31 +22,10 @@ set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS      OFF CACHE BOOL "" FORCE)
 
-# GPU acceleration via Vulkan.
-# Pre-generated shaders avoid cross-compilation issues with vulkan-shaders-gen.
-set(GGML_VULKAN ON CACHE BOOL "" FORCE)
-set(GGML_VULKAN_SHADERS_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated-vulkan-shaders" CACHE STRING "" FORCE)
+# GPU: Vulkan disabled — Adreno driver crashes on ggml compute shaders.
+# Re-enable when Qualcomm fixes their shader compiler.
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 
-# Android NDK provides libvulkan.so at runtime but no CMake package.
-# Provide Vulkan::Vulkan target and standalone Vulkan-Headers (v1.3.268)
-# so ggml can find everything it needs.
-if(ANDROID)
-    set(Vulkan_FOUND TRUE)
-    set(VULKAN_FOUND TRUE)
-    set(_vk_headers "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-headers/include")
-    if(NOT TARGET Vulkan::Vulkan)
-        add_library(Vulkan::Vulkan INTERFACE IMPORTED)
-        set_target_properties(Vulkan::Vulkan PROPERTIES
-            INTERFACE_LINK_LIBRARIES "vulkan"
-            INTERFACE_INCLUDE_DIRECTORIES "${_vk_headers}"
-        )
-    endif()
-    include_directories(BEFORE SYSTEM "${_vk_headers}")
-    # glslc from NDK for shader compilation and extension probing.
-    set(Vulkan_GLSLC_EXECUTABLE
-        "${ANDROID_NDK}/shader-tools/windows-x86_64/glslc.exe"
-        CACHE STRING "" FORCE)
-endif()
 
 # CRITICAL: Force -O3 on whisper.cpp regardless of build type.
 # Android Gradle passes -O0 for debug builds which destroys performance.

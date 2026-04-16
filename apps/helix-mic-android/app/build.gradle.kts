@@ -28,8 +28,7 @@ android {
                     "-DANDROID_PLATFORM=android-30",
                     "-DWHISPER_BUILD_TESTS=OFF",
                     "-DWHISPER_BUILD_EXAMPLES=OFF",
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    "-DGGML_VULKAN=ON"
+                    "-DBUILD_SHARED_LIBS=OFF"
                 )
             }
         }

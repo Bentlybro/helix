@@ -263,7 +263,9 @@ class WhisperCppClient(
                     text = text,
                     timestamp = System.currentTimeMillis(),
                     durationMs = (audio.size.toLong() * 1000L) / SAMPLE_RATE,
-                    speaker = null
+                    speaker = null,
+                    inferenceMs = elapsed,
+                    backendType = "DEVICE"
                 )
                 _segments.value = _segments.value + segment
                 Log.d(TAG, "chunk(${audio.size}, ${elapsed}ms): $text")

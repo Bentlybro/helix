@@ -38,6 +38,7 @@ class TranscriptionService(private val apiKey: String) : TranscriptionBackend {
     private var active = false
     private var reconnectAttempts = 0
     private var sessionConfigured = false
+    private var utteranceStartMs = 0L
 
     // Voice profile manager for speaker identification
     var voiceProfileManager: VoiceProfileManager? = null
@@ -213,6 +214,9 @@ class TranscriptionService(private val apiKey: String) : TranscriptionBackend {
                 "conversation.item.input_audio_transcription.delta" -> {
                     val delta = json.optString("delta", "")
                     if (delta.isNotEmpty()) {
+                        if (_partialText.value.isEmpty()) {
+                            utteranceStartMs = System.currentTimeMillis()
+                        }
                         _partialText.value = _partialText.value + delta
                     }
                 }
@@ -220,20 +224,19 @@ class TranscriptionService(private val apiKey: String) : TranscriptionBackend {
                 "conversation.item.input_audio_transcription.completed" -> {
                     val transcript = json.optString("transcript", "").trim()
                     if (transcript.isNotEmpty()) {
-                        // Speaker identification is now server-side (local server mode)
-                        // OpenAI Realtime path doesn't support speaker ID
-                        val speaker: String? = null
-
+                        val elapsed = if (utteranceStartMs > 0L) System.currentTimeMillis() - utteranceStartMs else 0L
                         val segment = TranscriptSegment(
                             text = transcript,
                             timestamp = System.currentTimeMillis(),
-                            speaker = speaker
+                            speaker = null,
+                            inferenceMs = elapsed,
+                            backendType = "OPENAI"
                         )
                         _segments.value = _segments.value + segment
-                        Log.d(TAG, "Completed [${speaker ?: "?"}]: $transcript")
+                        Log.d(TAG, "Completed (${elapsed}ms): $transcript")
                     }
-                    // Clear partial text for next utterance
                     _partialText.value = ""
+                    utteranceStartMs = 0L
                 }
 
                 "error" -> {
