@@ -68,17 +68,43 @@ data class Session(
 }
 
 class SessionManager(
-    private val prefs: SharedPreferences,
-    private val appContext: Context? = null
+    private val db: AppDatabase,
+    private val appContext: Context? = null,
+    legacyPrefs: SharedPreferences? = null
 ) {
 
     companion object {
         private const val TAG = "SessionManager"
-        private const val SESSIONS_KEY = "saved_sessions"
-        private const val MAX_SESSIONS = 50
+        private const val LEGACY_SESSIONS_KEY = "saved_sessions"
     }
 
+    private val dao: SessionDao = db.sessionDao()
     private var currentSessionStart: Long = 0L
+
+    init {
+        // Migrate existing SharedPreferences data into Room on first launch
+        if (legacyPrefs != null) {
+            migrateFromPrefs(legacyPrefs)
+        }
+    }
+
+    private fun migrateFromPrefs(prefs: SharedPreferences) {
+        val json = prefs.getString(LEGACY_SESSIONS_KEY, null) ?: return
+        try {
+            val arr = JSONArray(json)
+            val count = arr.length()
+            if (count == 0) return
+            Log.d(TAG, "Migrating $count sessions from SharedPreferences to Room")
+            for (i in 0 until count) {
+                val session = Session.fromJson(arr.getJSONObject(i))
+                dao.insert(SessionEntity.fromSession(session))
+            }
+            prefs.edit().remove(LEGACY_SESSIONS_KEY).apply()
+            Log.d(TAG, "Migration complete, cleared SharedPreferences key")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to migrate sessions from SharedPreferences", e)
+        }
+    }
 
     fun startSession(): String {
         currentSessionStart = System.currentTimeMillis()
@@ -108,20 +134,13 @@ class SessionManager(
     }
 
     fun updateSessionSummary(sessionId: String, summary: String) {
-        val sessions = loadSessions().toMutableList()
-        val index = sessions.indexOfFirst { it.id == sessionId }
-        if (index >= 0) {
-            sessions[index] = sessions[index].copy(summary = summary)
-            saveSessions(sessions)
-            Log.d(TAG, "Session $sessionId summary updated")
-        }
+        dao.updateSummary(sessionId, summary)
+        Log.d(TAG, "Session $sessionId summary updated")
     }
 
     fun loadSessions(): List<Session> {
-        val json = prefs.getString(SESSIONS_KEY, null) ?: return emptyList()
         return try {
-            val arr = JSONArray(json)
-            (0 until arr.length()).map { Session.fromJson(arr.getJSONObject(it)) }
+            dao.getAll().map { it.toSession() }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load sessions", e)
             emptyList()
@@ -129,39 +148,22 @@ class SessionManager(
     }
 
     fun deleteSession(sessionId: String) {
-        val sessions = loadSessions().toMutableList()
-        sessions.removeAll { it.id == sessionId }
-        saveSessions(sessions)
+        dao.delete(sessionId)
         appContext?.let { SessionAudioRecorder.delete(it, sessionId) }
         Log.d(TAG, "Session $sessionId deleted")
     }
 
     fun deleteAllSessions() {
-        saveSessions(emptyList())
+        dao.deleteAll()
         Log.d(TAG, "All sessions deleted")
     }
 
     fun updateSessionTitle(sessionId: String, title: String?) {
-        val sessions = loadSessions().toMutableList()
-        val index = sessions.indexOfFirst { it.id == sessionId }
-        if (index >= 0) {
-            sessions[index] = sessions[index].copy(title = title)
-            saveSessions(sessions)
-            Log.d(TAG, "Session $sessionId title updated")
-        }
+        dao.updateTitle(sessionId, title)
+        Log.d(TAG, "Session $sessionId title updated")
     }
 
     fun saveSession(session: Session) {
-        val sessions = loadSessions().toMutableList()
-        sessions.add(0, session) // newest first
-        // Trim to max
-        while (sessions.size > MAX_SESSIONS) sessions.removeLast()
-        saveSessions(sessions)
-    }
-
-    private fun saveSessions(sessions: List<Session>) {
-        val arr = JSONArray()
-        sessions.forEach { arr.put(it.toJson()) }
-        prefs.edit().putString(SESSIONS_KEY, arr.toString()).apply()
+        dao.insert(SessionEntity.fromSession(session))
     }
 }

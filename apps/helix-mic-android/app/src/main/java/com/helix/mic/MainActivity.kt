@@ -45,7 +45,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         bleManager = HelixMicBleManager(this)
         sharedPrefs = getSharedPreferences("helix_mic_prefs", Context.MODE_PRIVATE)
-        sessionManager = SessionManager(sharedPrefs, applicationContext)
+        val database = AppDatabase.getInstance(applicationContext)
+        sessionManager = SessionManager(database, applicationContext, legacyPrefs = sharedPrefs)
         enableEdgeToEdge()
 
         // Check battery optimization — prompt user to disable for reliable BLE background

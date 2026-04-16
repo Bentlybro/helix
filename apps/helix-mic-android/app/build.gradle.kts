@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.kapt)
 }
 
 android {
@@ -70,5 +71,8 @@ dependencies {
     implementation(libs.accompanist.permissions)
     implementation(libs.okhttp)
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.1")
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    kapt(libs.room.compiler)
     debugImplementation(libs.androidx.ui.tooling)
 }
