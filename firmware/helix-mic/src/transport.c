@@ -114,7 +114,10 @@ static ssize_t read_battery(struct bt_conn *conn,
 
 /* ─── Dynamic GATT service ──────────────────────────────────────────── */
 
-/* Attribute table for the Helix service (registered dynamically) */
+/* Attribute table for the Helix service (registered dynamically).
+ * All characteristics require an encrypted link — unauthenticated
+ * (Just Works) pairing provides AES-CCM encryption against passive
+ * eavesdropping.  Bonding persists the keys for seamless reconnect. */
 static struct bt_gatt_attr helix_attrs[] = {
     /* [0] Primary Service */
     BT_GATT_PRIMARY_SERVICE(&helix_svc_uuid),
@@ -126,20 +129,20 @@ static struct bt_gatt_attr helix_attrs[] = {
                            NULL, NULL, NULL),
     /* [2] is the auto-generated value attr from the macro above */
 
-    /* [3] Audio CCC */
+    /* [3] Audio CCC — require encrypted link to subscribe */
     BT_GATT_CCC(audio_ccc_changed,
-                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                 BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT),
 
     /* [4] Battery Characteristic Declaration */
     BT_GATT_CHARACTERISTIC(&helix_battery_uuid.uuid,
                            BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                           BT_GATT_PERM_READ,
+                           BT_GATT_PERM_READ_ENCRYPT,
                            read_battery, NULL, NULL),
     /* [5] is the auto-generated value attr */
 
     /* [6] Battery CCC */
     BT_GATT_CCC(battery_ccc_changed,
-                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                 BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT),
 };
 
 static struct bt_gatt_service helix_svc = BT_GATT_SERVICE(helix_attrs);

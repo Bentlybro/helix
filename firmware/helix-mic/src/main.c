@@ -275,7 +275,6 @@ static void connection_changed(bool connected)
 {
     if (connected) {
         LOG_INF("=== CONNECTION ESTABLISHED ===");
-        /* Start in connected-idle; audio handler will switch to audio state */
         led_set_state(LED_STATE_CONNECTED_IDLE);
     } else {
         LOG_INF("=== CLIENT DISCONNECTED === stopping audio stream");
@@ -286,15 +285,14 @@ static void connection_changed(bool connected)
             LOG_INF("Mic stopped cleanly");
         }
         mic_running = false;
-        
-        /* Brief red flash — LED timer auto-transitions to OFF after 200ms.
-         * Don't k_sleep() here: this may run on the system workqueue.
-         * The main loop will set advertising LED when it sees disconnected. */
+
+        /* Flush stale audio from the ring buffer so the next connection
+         * doesn't start with leftover data from the previous session. */
+        ring_buf_reset(&audio_ring_buf);
+        pusher_seq = 0;
+
         led_set_state(LED_STATE_DISCONNECTED);
-        
-        /* Restart advertising indicator after a brief delay using k_work */
-        LOG_INF("Restarting advertising after disconnect...");
-        /* Let main loop handle LED transition to advertising */
+        LOG_INF("State reset, ready for reconnection");
     }
 }
 
