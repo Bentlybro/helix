@@ -39,8 +39,8 @@ class WhisperCppClient(
 
         // Chunk boundaries
         private const val PRE_ROLL_MS = 300
-        private const val MIN_SILENCE_MS = 500
-        private const val MAX_CHUNK_MS = 20000
+        private const val MIN_SILENCE_MS = 300
+        private const val MAX_CHUNK_MS = 10000
         private const val MIN_CHUNK_MS = 300
 
         private const val PRE_ROLL_SAMPLES = SAMPLE_RATE * PRE_ROLL_MS / 1000

@@ -25,9 +25,11 @@ android {
                 cppFlags += "-std=c++17"
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
+                    "-DANDROID_PLATFORM=android-30",
                     "-DWHISPER_BUILD_TESTS=OFF",
                     "-DWHISPER_BUILD_EXAMPLES=OFF",
-                    "-DBUILD_SHARED_LIBS=OFF"
+                    "-DBUILD_SHARED_LIBS=OFF",
+                    "-DGGML_VULKAN=ON"
                 )
             }
         }

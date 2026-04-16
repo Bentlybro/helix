@@ -29,7 +29,7 @@ Java_com_helix_mic_WhisperNative_nativeInit(JNIEnv* env, jobject /*thiz*/, jstri
     env->ReleaseStringUTFChars(jpath, path_c);
 
     whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = false;
+    cparams.use_gpu = false;  // Adreno Vulkan driver crashes on ggml compute shaders
 
     whisper_context* ctx = whisper_init_from_file_with_params(path.c_str(), cparams);
     if (ctx == nullptr) {
@@ -62,7 +62,7 @@ Java_com_helix_mic_WhisperNative_nativeTranscribe(JNIEnv* env, jobject /*thiz*/,
     params.no_context       = true;
     params.suppress_blank   = true;
     params.language         = "en";
-    params.n_threads        = 4;
+    params.n_threads        = 6;
     params.temperature      = 0.0f;
     // Cap the number of decoder steps. base.en shouldn't need more than this for short chunks.
     params.max_tokens       = 128;
