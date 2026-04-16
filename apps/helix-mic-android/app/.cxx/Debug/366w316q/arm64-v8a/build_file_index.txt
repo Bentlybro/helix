@@ -1,7 +1,0 @@
-D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\CMakeLists.txt
-D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\cmake\build-info.cmake
-D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\cmake\whisper-config.cmake.in
-D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\CMakeLists.txt
-D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\CMakeLists.txt
-D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\src\CMakeLists.txt
-D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\src\CMakeLists.txt
