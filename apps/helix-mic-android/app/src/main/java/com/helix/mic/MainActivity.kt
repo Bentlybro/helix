@@ -2057,8 +2057,10 @@ fun SettingsScreen(
                             label = m.label,
                             subtitle = when (m) {
                                 WhisperModel.TINY_EN -> "Fastest. Lowest accuracy."
-                                WhisperModel.BASE_EN -> "Balanced. Good default."
-                                WhisperModel.SMALL_EN -> "Most accurate. Slower."
+                                WhisperModel.BASE_EN_Q5 -> "Quantized. Fast + accurate."
+                                WhisperModel.BASE_EN -> "Full precision. Larger download."
+                                WhisperModel.SMALL_EN_Q5 -> "Best quality. Quantized."
+                                WhisperModel.SMALL_EN -> "Best quality. Full precision."
                             },
                             selected = onDeviceModel == m,
                             onClick = { onOnDeviceModelChange(m) }
