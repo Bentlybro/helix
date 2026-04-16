@@ -21,8 +21,9 @@ int transport_start_advertising(void);
 /* Send audio data notification */
 int transport_send_audio(const uint8_t *data, size_t len, uint16_t seq, uint8_t flags);
 
-/* Update battery level (sends notification if subscribed) */
-int transport_update_battery(uint8_t level);
+/* Update battery state: percent (0-100, or 0xFF = unknown) + millivolts.
+ * Sends a 3-byte notification [percent, mv_lo, mv_hi] if subscribed. */
+int transport_update_battery(uint8_t level, uint16_t millivolts);
 
 /* Check if a client is connected */
 bool transport_is_connected(void);

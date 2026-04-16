@@ -100,7 +100,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         bleManager = HelixMicBleManager(this)
         sharedPrefs = getSharedPreferences("helix_mic_prefs", Context.MODE_PRIVATE)
-        sessionManager = SessionManager(sharedPrefs)
+        sessionManager = SessionManager(sharedPrefs, applicationContext)
         enableEdgeToEdge()
 
         // Check battery optimization — prompt user to disable for reliable BLE background
@@ -145,16 +145,31 @@ fun HelixMicApp(
 ) {
     val connectionState by bleManager.connectionState.collectAsState()
     val batteryPercent by bleManager.batteryPercent.collectAsState()
+    val batteryMillivolts by bleManager.batteryMillivolts.collectAsState()
     val isReceivingAudio by bleManager.isReceivingAudio.collectAsState()
     val packetCount by bleManager.packetCount.collectAsState()
 
     var currentScreen by remember { mutableStateOf(Screen.MAIN) }
     var apiKey by remember { mutableStateOf(sharedPrefs.getString("openai_api_key", "") ?: "") }
-    var useLocalServer by remember { mutableStateOf(sharedPrefs.getBoolean("use_local_server", false)) }
+    var backendType by remember {
+        mutableStateOf(
+            if (sharedPrefs.contains("backend_type")) {
+                BackendType.fromKey(sharedPrefs.getString("backend_type", null))
+            } else if (sharedPrefs.getBoolean("use_local_server", false)) {
+                BackendType.LOCAL_SERVER
+            } else {
+                BackendType.OPENAI_REALTIME
+            }
+        )
+    }
     var serverUrl by remember { mutableStateOf(sharedPrefs.getString("server_url", "ws://192.168.0.35:8770/ws/stream") ?: "ws://192.168.0.35:8770/ws/stream") }
+    var onDeviceModel by remember {
+        mutableStateOf(WhisperModel.fromId(sharedPrefs.getString("whisper_model", WhisperModel.BASE_EN.id)))
+    }
 
     var isRecording by remember { mutableStateOf(false) }
     var currentSessionId by remember { mutableStateOf<String?>(null) }
+    var audioRecorder by remember { mutableStateOf<SessionAudioRecorder?>(null) }
     var sessionStartTime by remember { mutableStateOf(0L) }
     var summary by remember { mutableStateOf<String?>(null) }
     var isSummarizing by remember { mutableStateOf(false) }
@@ -165,24 +180,41 @@ fun HelixMicApp(
     val voiceProfileManager = remember { VoiceProfileManager(context) }
     var isVoiceEnrolled by remember { mutableStateOf(voiceProfileManager.isEnrolled) }
 
+    val whisperModelManager = remember { WhisperModelManager(context) }
+
     val openAiService = remember(apiKey) {
         if (apiKey.isNotBlank()) {
             TranscriptionService(apiKey).also { it.voiceProfileManager = voiceProfileManager }
         } else null
     }
     val localServerClient = remember(serverUrl) { LocalServerClient(serverUrl) }
+    val whisperClient = remember(onDeviceModel) {
+        WhisperCppClient(context, onDeviceModel, whisperModelManager)
+    }
 
     DisposableEffect(Unit) {
         onDispose {
             openAiService?.destroy()
             localServerClient.destroy()
+            whisperClient.destroy()
         }
     }
 
-    val segments by (if (useLocalServer) localServerClient.segments else (openAiService?.segments ?: MutableStateFlow(emptyList()))).collectAsState()
-    val partialText by (if (useLocalServer) localServerClient.partialText else (openAiService?.partialText ?: MutableStateFlow(""))).collectAsState()
-    val isConnected by (if (useLocalServer) localServerClient.isConnected else (openAiService?.isConnected ?: MutableStateFlow(false))).collectAsState()
-    val transcriptionError by (if (useLocalServer) localServerClient.error else (openAiService?.error ?: MutableStateFlow<String?>(null))).collectAsState()
+    val activeBackend: TranscriptionBackend? = when (backendType) {
+        BackendType.OPENAI_REALTIME -> openAiService
+        BackendType.LOCAL_SERVER -> localServerClient
+        BackendType.ON_DEVICE -> whisperClient
+    }
+
+    val emptySegmentsFlow = remember { MutableStateFlow<List<TranscriptSegment>>(emptyList()) }
+    val emptyPartialFlow = remember { MutableStateFlow("") }
+    val emptyConnFlow = remember { MutableStateFlow(false) }
+    val emptyErrFlow = remember { MutableStateFlow<String?>(null) }
+
+    val segments by (activeBackend?.segments ?: emptySegmentsFlow).collectAsState()
+    val partialText by (activeBackend?.partialText ?: emptyPartialFlow).collectAsState()
+    val isConnected by (activeBackend?.isConnected ?: emptyConnFlow).collectAsState()
+    val transcriptionError by (activeBackend?.error ?: emptyErrFlow).collectAsState()
 
     val scope = rememberCoroutineScope()
 
@@ -192,10 +224,12 @@ fun HelixMicApp(
             override fun onReceive(ctx: Context?, intent: Intent?) {
                 if (intent?.action == HelixForegroundService.ACTION_STOP && isRecording) {
                     isRecording = false
-                    if (useLocalServer) localServerClient.stop() else openAiService?.stop()
+                    activeBackend?.stop()
+                    val savedFile = audioRecorder?.close()
+                    audioRecorder = null
                     // Auto-save session
                     currentSessionId?.let { id ->
-                        sessionManager.stopSession(id, segments.toList(), null)
+                        sessionManager.stopSession(id, segments.toList(), null, hasAudio = savedFile != null)
                         sessionSaved = true
                     }
                     val fullText = segments.joinToString(" ") { it.text }
@@ -227,11 +261,11 @@ fun HelixMicApp(
         onDispose { context.unregisterReceiver(receiver) }
     }
 
-    LaunchedEffect(useLocalServer, openAiService, isRecording) {
-        if (isRecording) {
+    LaunchedEffect(backendType, activeBackend, isRecording) {
+        if (isRecording && activeBackend != null) {
             bleManager.audioFrames.collect { frame ->
-                if (useLocalServer) localServerClient.feedAudio(frame)
-                else openAiService?.feedAudio(frame)
+                activeBackend.feedAudio(frame)
+                audioRecorder?.write(frame)
             }
         }
     }
@@ -297,10 +331,19 @@ fun HelixMicApp(
                     SettingsScreen(
                         apiKey = apiKey,
                         onApiKeyChange = { apiKey = it; sharedPrefs.edit().putString("openai_api_key", it).apply() },
-                        useLocalServer = useLocalServer,
-                        onUseLocalServerChange = { useLocalServer = it; sharedPrefs.edit().putBoolean("use_local_server", it).apply() },
+                        backendType = backendType,
+                        onBackendTypeChange = {
+                            backendType = it
+                            sharedPrefs.edit().putString("backend_type", it.toKey()).apply()
+                        },
                         serverUrl = serverUrl,
                         onServerUrlChange = { serverUrl = it; sharedPrefs.edit().putString("server_url", it).apply() },
+                        onDeviceModel = onDeviceModel,
+                        onOnDeviceModelChange = {
+                            onDeviceModel = it
+                            sharedPrefs.edit().putString("whisper_model", it.id).apply()
+                        },
+                        modelManager = whisperModelManager,
                         voiceProfileManager = voiceProfileManager,
                         isVoiceEnrolled = isVoiceEnrolled,
                         onEnrollmentChanged = { isVoiceEnrolled = it },
@@ -437,6 +480,7 @@ fun HelixMicApp(
                             // Connected — status line
                             StatusLine(
                                 batteryPercent = batteryPercent,
+                                batteryMillivolts = batteryMillivolts,
                                 isRecording = isRecording,
                                 elapsedSeconds = elapsedSeconds,
                                 isWsConnected = isConnected
@@ -525,27 +569,42 @@ fun HelixMicApp(
                             Spacer(modifier = Modifier.height(12.dp))
                             RecordButton(
                                 isRecording = isRecording,
-                                canRecord = useLocalServer || apiKey.isNotBlank(),
+                                canRecord = when (backendType) {
+                                    BackendType.OPENAI_REALTIME -> apiKey.isNotBlank()
+                                    BackendType.LOCAL_SERVER -> true
+                                    BackendType.ON_DEVICE -> whisperModelManager.isReady(onDeviceModel)
+                                },
                                 pulseScale = pulseScale,
                                 packetCount = packetCount,
                                 onRecord = {
-                                    if (!useLocalServer && apiKey.isBlank()) {
-                                        Toast.makeText(context, "Set API key or enable local server", Toast.LENGTH_SHORT).show()
-                                        return@RecordButton
+                                    when (backendType) {
+                                        BackendType.OPENAI_REALTIME -> if (apiKey.isBlank()) {
+                                            Toast.makeText(context, "Set API key or choose a different backend", Toast.LENGTH_SHORT).show()
+                                            return@RecordButton
+                                        }
+                                        BackendType.ON_DEVICE -> if (!whisperModelManager.isReady(onDeviceModel)) {
+                                            Toast.makeText(context, "Download the Whisper model in Settings", Toast.LENGTH_SHORT).show()
+                                            return@RecordButton
+                                        }
+                                        BackendType.LOCAL_SERVER -> Unit
                                     }
                                     if (!isRecording) {
                                         summary = null; sessionSaved = false
-                                        if (useLocalServer) localServerClient.start() else openAiService?.start()
+                                        activeBackend?.start()
                                         bleManager.resetPacketCount()
-                                        currentSessionId = sessionManager.startSession()
+                                        val newId = sessionManager.startSession()
+                                        currentSessionId = newId
+                                        audioRecorder = SessionAudioRecorder(context, newId)
                                         sessionStartTime = System.currentTimeMillis()
                                         isRecording = true
                                     } else {
                                         isRecording = false
-                                        if (useLocalServer) localServerClient.stop() else openAiService?.stop()
+                                        activeBackend?.stop()
+                                        val savedFile = audioRecorder?.close()
+                                        audioRecorder = null
                                         // Auto-save session immediately
                                         currentSessionId?.let { id ->
-                                            sessionManager.stopSession(id, segments.toList(), null)
+                                            sessionManager.stopSession(id, segments.toList(), null, hasAudio = savedFile != null)
                                             sessionSaved = true
                                         }
                                         val fullText = segments.joinToString(" ") { it.text }
@@ -573,7 +632,9 @@ fun HelixMicApp(
                                     if (isRecording) {
                                         isRecording = false
                                         HelixForegroundService.stop(context)
-                                        if (useLocalServer) localServerClient.stop() else openAiService?.stop()
+                                        activeBackend?.stop()
+                                        audioRecorder?.close()
+                                        audioRecorder = null
                                     }
                                     bleManager.disconnect()
                                 }
@@ -615,6 +676,157 @@ fun SectionHeader(text: String) {
             modifier = Modifier.padding(bottom = 8.dp)
         )
         HairlineDivider()
+    }
+}
+
+@Composable
+fun BackendOption(
+    label: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(0.5.dp, if (selected) HelixTheme.TextPrimary else HelixTheme.Hairline)
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .border(
+                    0.5.dp,
+                    if (selected) HelixTheme.TextPrimary else HelixTheme.BorderDefault
+                )
+                .background(if (selected) HelixTheme.TextPrimary else Color.Transparent)
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                label,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Light,
+                color = if (selected) HelixTheme.TextPrimary else HelixTheme.TextSecondary,
+                letterSpacing = 2.sp
+            )
+            Text(
+                subtitle,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = HelixTheme.TextMuted
+            )
+        }
+    }
+}
+
+@Composable
+fun ModelDownloadControls(
+    model: WhisperModel,
+    state: DownloadState,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Column {
+        when (state) {
+            is DownloadState.Ready -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "MODEL READY",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextSecondary,
+                        letterSpacing = 2.sp
+                    )
+                    OutlinedButton(
+                        onClick = onDelete,
+                        shape = HelixTheme.SharpShape,
+                        border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted)
+                    ) {
+                        Text("DELETE", fontSize = 10.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
+                    }
+                }
+            }
+            is DownloadState.Downloading -> {
+                Column {
+                    Text(
+                        "DOWNLOADING  ${state.percent}%",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextSecondary,
+                        letterSpacing = 2.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
+                            .background(HelixTheme.Hairline)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(state.percent / 100f)
+                                .height(2.dp)
+                                .background(HelixTheme.TextPrimary)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onCancel,
+                        shape = HelixTheme.SharpShape,
+                        border = BorderStroke(0.5.dp, HelixTheme.BorderDefault),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextMuted)
+                    ) {
+                        Text("CANCEL", fontSize = 10.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
+                    }
+                }
+            }
+            is DownloadState.Failed -> {
+                Column {
+                    Text(
+                        "DOWNLOAD FAILED",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.RecordingRed,
+                        letterSpacing = 2.sp
+                    )
+                    Text(state.message, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextMuted)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onDownload,
+                        shape = HelixTheme.SharpShape,
+                        border = BorderStroke(0.5.dp, HelixTheme.TextSecondary),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextPrimary)
+                    ) {
+                        Text("RETRY", fontSize = 10.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
+                    }
+                }
+            }
+            DownloadState.Idle -> {
+                OutlinedButton(
+                    onClick = onDownload,
+                    shape = HelixTheme.SharpShape,
+                    border = BorderStroke(0.5.dp, HelixTheme.TextPrimary),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextPrimary)
+                ) {
+                    Text(
+                        "DOWNLOAD  ${model.approxMb} MB",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 2.sp
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -686,6 +898,7 @@ fun TopBar(
 @Composable
 fun StatusLine(
     batteryPercent: Int?,
+    batteryMillivolts: Int?,
     isRecording: Boolean,
     elapsedSeconds: Long,
     isWsConnected: Boolean
@@ -704,14 +917,18 @@ fun StatusLine(
             color = HelixTheme.Connected,
             letterSpacing = 2.sp
         )
-        if (batteryPercent != null) {
-            Text(
-                "BAT ${batteryPercent}%",
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                color = HelixTheme.TextMuted
-            )
+        val batLabel = when {
+            batteryPercent != null && batteryMillivolts != null && batteryMillivolts > 0 ->
+                "BAT ${batteryPercent}%  ${"%.2f".format(batteryMillivolts / 1000f)}V"
+            batteryPercent != null -> "BAT ${batteryPercent}%"
+            else -> "BAT --"
         }
+        Text(
+            batLabel,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            color = HelixTheme.TextMuted
+        )
         if (isRecording) {
             Text(
                 "REC ${formatDuration(elapsedSeconds)}",
@@ -1211,6 +1428,14 @@ fun SessionDetailScreen(
     var isEditing by remember { mutableStateOf(false) }
     var editTitle by remember { mutableStateOf(session.title ?: "") }
 
+    val audioPlayer = remember { SessionAudioPlayer() }
+    val isPlaying by audioPlayer.isPlaying.collectAsState()
+    val progressMs by audioPlayer.progressMs.collectAsState()
+    DisposableEffect(Unit) { onDispose { audioPlayer.release() } }
+    val audioFile = remember(session.id) {
+        if (session.hasAudio) SessionAudioRecorder.fileFor(context, session.id) else null
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1267,6 +1492,61 @@ fun SessionDetailScreen(
         }
 
         HairlineDivider()
+
+        // Audio playback strip
+        if (audioFile != null && audioFile.exists()) {
+            val totalMs = remember(audioFile.length()) {
+                (audioFile.length() * 1000L) / (16000L * 2L)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        if (isPlaying) audioPlayer.stop() else audioPlayer.play(audioFile)
+                    },
+                    shape = HelixTheme.SharpShape,
+                    border = BorderStroke(0.5.dp, HelixTheme.TextPrimary),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = HelixTheme.TextPrimary)
+                ) {
+                    Text(
+                        if (isPlaying) "STOP" else "PLAY",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 2.sp
+                    )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "AUDIO  ${formatDuration(totalMs / 1000)}",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextSecondary,
+                        letterSpacing = 2.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    val frac = if (totalMs > 0) (progressMs.toFloat() / totalMs).coerceIn(0f, 1f) else 0f
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(HelixTheme.Hairline)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(frac)
+                                .height(1.dp)
+                                .background(HelixTheme.TextPrimary)
+                        )
+                    }
+                }
+            }
+            HairlineDivider()
+        }
 
         // Edit title dialog
         if (isEditing) {
@@ -1478,10 +1758,13 @@ fun ScreenHeader(title: String, onBack: () -> Unit) {
 fun SettingsScreen(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
-    useLocalServer: Boolean,
-    onUseLocalServerChange: (Boolean) -> Unit,
+    backendType: BackendType,
+    onBackendTypeChange: (BackendType) -> Unit,
     serverUrl: String,
     onServerUrlChange: (String) -> Unit,
+    onDeviceModel: WhisperModel,
+    onOnDeviceModelChange: (WhisperModel) -> Unit,
+    modelManager: WhisperModelManager,
     voiceProfileManager: VoiceProfileManager,
     isVoiceEnrolled: Boolean,
     onEnrollmentChanged: (Boolean) -> Unit,
@@ -1495,8 +1778,8 @@ fun SettingsScreen(
     var serverEnrolledName by remember { mutableStateOf<String?>(null) }
     var serverCheckDone by remember { mutableStateOf(false) }
 
-    LaunchedEffect(serverUrl, useLocalServer) {
-        if (useLocalServer) {
+    LaunchedEffect(serverUrl, backendType) {
+        if (backendType == BackendType.LOCAL_SERVER) {
             kotlinx.coroutines.withContext(Dispatchers.IO) {
                 val name = voiceProfileManager.checkServerEnrollment(serverUrl)
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
@@ -1505,6 +1788,9 @@ fun SettingsScreen(
             }
         } else { serverCheckDone = true }
     }
+
+    val downloadState by modelManager.state.collectAsState()
+    LaunchedEffect(onDeviceModel) { modelManager.refreshState(onDeviceModel) }
 
     val inputColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = Color.Transparent,
@@ -1575,40 +1861,28 @@ fun SettingsScreen(
                 SectionHeader("BACKEND")
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "LOCAL SERVER",
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Light,
-                            color = HelixTheme.TextPrimary,
-                            letterSpacing = 1.sp
-                        )
-                        Text(
-                            if (useLocalServer) "Streaming to local STT" else "OpenAI Realtime API",
-                            fontSize = 11.sp, color = HelixTheme.TextMuted
-                        )
-                    }
-                    Switch(
-                        checked = useLocalServer,
-                        onCheckedChange = onUseLocalServerChange,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = HelixTheme.TextPrimary,
-                            checkedTrackColor = HelixTheme.BorderDefault,
-                            uncheckedThumbColor = HelixTheme.TextMuted,
-                            uncheckedTrackColor = HelixTheme.Hairline,
-                            checkedBorderColor = Color.Transparent,
-                            uncheckedBorderColor = Color.Transparent
-                        )
-                    )
-                }
+                BackendOption(
+                    label = "OPENAI REALTIME",
+                    subtitle = "Cloud. Uses API key above.",
+                    selected = backendType == BackendType.OPENAI_REALTIME,
+                    onClick = { onBackendTypeChange(BackendType.OPENAI_REALTIME) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                BackendOption(
+                    label = "LOCAL SERVER",
+                    subtitle = "Self-hosted STT on LAN.",
+                    selected = backendType == BackendType.LOCAL_SERVER,
+                    onClick = { onBackendTypeChange(BackendType.LOCAL_SERVER) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                BackendOption(
+                    label = "ON DEVICE",
+                    subtitle = "whisper.cpp + VAD. Fully offline.",
+                    selected = backendType == BackendType.ON_DEVICE,
+                    onClick = { onBackendTypeChange(BackendType.ON_DEVICE) }
+                )
 
-                if (useLocalServer) {
+                if (backendType == BackendType.LOCAL_SERVER) {
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         "SERVER URL",
@@ -1632,6 +1906,42 @@ fun SettingsScreen(
                         Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(HelixTheme.BorderDefault))
                     }
                 }
+
+                if (backendType == BackendType.ON_DEVICE) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "MODEL",
+                        fontSize = 9.sp, fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextMuted, letterSpacing = 2.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    WhisperModel.entries.forEach { m ->
+                        BackendOption(
+                            label = m.label,
+                            subtitle = when (m) {
+                                WhisperModel.TINY_EN -> "Fastest. Lowest accuracy."
+                                WhisperModel.BASE_EN -> "Balanced. Good default."
+                                WhisperModel.SMALL_EN -> "Most accurate. Slower."
+                            },
+                            selected = onDeviceModel == m,
+                            onClick = { onOnDeviceModelChange(m) }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ModelDownloadControls(
+                        model = onDeviceModel,
+                        state = downloadState,
+                        onDownload = {
+                            scope.launch(Dispatchers.IO) {
+                                modelManager.ensureDownloaded(onDeviceModel)
+                            }
+                        },
+                        onCancel = { modelManager.cancel() },
+                        onDelete = { modelManager.delete(onDeviceModel) }
+                    )
+                }
             }
 
             // Voice Profile
@@ -1648,6 +1958,7 @@ fun SettingsScreen(
 
                 val displayName = serverEnrolledName ?: voiceProfileManager.enrolledName
                 val effectiveEnrolled = if (serverCheckDone) (serverEnrolledName != null) else isVoiceEnrolled
+                val useLocalServer = backendType == BackendType.LOCAL_SERVER
 
                 if (!serverCheckDone && useLocalServer) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

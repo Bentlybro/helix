@@ -10,14 +10,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 
-data class TranscriptSegment(
-    val text: String,
-    val timestamp: Long,
-    val durationMs: Long = 0L,
-    val speaker: String? = null
-)
-
-class TranscriptionService(private val apiKey: String) {
+class TranscriptionService(private val apiKey: String) : TranscriptionBackend {
 
     companion object {
         private const val TAG = "TranscriptionService"
@@ -28,17 +21,17 @@ class TranscriptionService(private val apiKey: String) {
 
     // Completed segments
     private val _segments = MutableStateFlow<List<TranscriptSegment>>(emptyList())
-    val segments: StateFlow<List<TranscriptSegment>> = _segments.asStateFlow()
+    override val segments: StateFlow<List<TranscriptSegment>> = _segments.asStateFlow()
 
     // Current partial text from deltas
     private val _partialText = MutableStateFlow("")
-    val partialText: StateFlow<String> = _partialText.asStateFlow()
+    override val partialText: StateFlow<String> = _partialText.asStateFlow()
 
     private val _isConnected = MutableStateFlow(false)
-    val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+    override val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
+    override val error: StateFlow<String?> = _error.asStateFlow()
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocket: WebSocket? = null
@@ -60,7 +53,7 @@ class TranscriptionService(private val apiKey: String) {
         .pingInterval(30, TimeUnit.SECONDS)
         .build()
 
-    fun start() {
+    override fun start() {
         active = true
         reconnectAttempts = 0
         sessionConfigured = false
@@ -73,7 +66,7 @@ class TranscriptionService(private val apiKey: String) {
         Log.d(TAG, "TranscriptionService started")
     }
 
-    fun stop() {
+    override fun stop() {
         active = false
         webSocket?.close(1000, "Recording stopped")
         webSocket = null
@@ -82,7 +75,7 @@ class TranscriptionService(private val apiKey: String) {
         Log.d(TAG, "TranscriptionService stopped")
     }
 
-    fun clear() {
+    override fun clear() {
         _segments.value = emptyList()
         _partialText.value = ""
         _error.value = null
@@ -92,7 +85,7 @@ class TranscriptionService(private val apiKey: String) {
      * Feed raw PCM audio from BLE (16kHz 16-bit mono).
      * Resamples to 24kHz and sends over WebSocket.
      */
-    fun feedAudio(pcmData: ByteArray) {
+    override fun feedAudio(pcmData: ByteArray) {
         if (!active || !sessionConfigured) return
 
         // Buffer raw PCM for speaker identification
@@ -273,11 +266,11 @@ class TranscriptionService(private val apiKey: String) {
         }
     }
 
-    fun getFullTranscriptText(): String {
+    override fun getFullTranscriptText(): String {
         return _segments.value.joinToString(" ") { it.text }
     }
 
-    fun destroy() {
+    override fun destroy() {
         active = false
         webSocket?.close(1000, "Destroyed")
         webSocket = null

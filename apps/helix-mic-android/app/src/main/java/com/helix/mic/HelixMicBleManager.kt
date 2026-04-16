@@ -8,6 +8,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
+import android.util.Log
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -81,8 +82,12 @@ class HelixMicBleManager(private val context: Context) {
     private val _deviceAddress = MutableStateFlow<String?>(null)
     val deviceAddress: StateFlow<String?> = _deviceAddress
 
+    // null = unknown / not received yet; same sentinel used for firmware's 0xFF
     private val _batteryPercent = MutableStateFlow<Int?>(null)
     val batteryPercent: StateFlow<Int?> = _batteryPercent
+
+    private val _batteryMillivolts = MutableStateFlow<Int?>(null)
+    val batteryMillivolts: StateFlow<Int?> = _batteryMillivolts
 
     private val _isReceivingAudio = MutableStateFlow(false)
     val isReceivingAudio: StateFlow<Boolean> = _isReceivingAudio
@@ -154,22 +159,25 @@ class HelixMicBleManager(private val context: Context) {
                 return
             }
 
-            // Subscribe to audio notifications
+            // Subscribe to audio notifications (queued so it serializes with battery)
             val audioChar = service.getCharacteristic(AUDIO_UUID)
             if (audioChar == null) {
                 android.util.Log.e("HelixMic", "Audio characteristic $AUDIO_UUID NOT FOUND!")
             } else {
-                gatt.setCharacteristicNotification(audioChar, true)
-                val desc = audioChar.getDescriptor(CCCD_UUID)
-                if (desc == null) {
-                    android.util.Log.e("HelixMic", "Audio CCCD descriptor NOT FOUND!")
-                } else {
-                    desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(desc)
+                enqueue {
+                    gatt.setCharacteristicNotification(audioChar, true)
+                    val desc = audioChar.getDescriptor(CCCD_UUID)
+                    if (desc == null) {
+                        android.util.Log.e("HelixMic", "Audio CCCD descriptor NOT FOUND!")
+                        nextGattOp()
+                    } else {
+                        desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(desc)
+                    }
                 }
             }
 
-            // Queue battery subscription
+            // Queue battery subscription (NOTIFY + initial READ)
             service.getCharacteristic(BATTERY_UUID)?.let { char ->
                 enqueue {
                     gatt.setCharacteristicNotification(char, true)
@@ -202,8 +210,9 @@ class HelixMicBleManager(private val context: Context) {
             val value = characteristic.value?.copyOf()
             if (status == BluetoothGatt.GATT_SUCCESS && value != null) {
                 when (uuid) {
-                    BATTERY_UUID -> _batteryPercent.value =
-                        value.firstOrNull()?.toInt()?.and(0xFF)
+                    BATTERY_UUID -> {
+                        parseBattery(value, "READ")
+                    }
                 }
             }
             nextGattOp()
@@ -230,10 +239,21 @@ class HelixMicBleManager(private val context: Context) {
                         _isReceivingAudio.value = true
                     }
                 }
-                BATTERY_UUID -> _batteryPercent.value =
-                    value.firstOrNull()?.toInt()?.and(0xFF)
+                BATTERY_UUID -> parseBattery(value, "NOTIFY")
             }
         }
+    }
+
+    private fun parseBattery(value: ByteArray, kind: String) {
+        val hex = value.joinToString(" ") { "%02x".format(it) }
+        val rawPct = value.firstOrNull()?.toInt()?.and(0xFF)
+        val pct = if (rawPct == null || rawPct == 0xFF) null else rawPct
+        val mv: Int? = if (value.size >= 3) {
+            ((value[1].toInt() and 0xFF) or ((value[2].toInt() and 0xFF) shl 8))
+        } else null
+        Log.d("HelixMic", "battery $kind raw=[$hex] pct=$pct mV=$mv")
+        _batteryPercent.value = pct
+        _batteryMillivolts.value = mv
     }
 
     fun startScan() {

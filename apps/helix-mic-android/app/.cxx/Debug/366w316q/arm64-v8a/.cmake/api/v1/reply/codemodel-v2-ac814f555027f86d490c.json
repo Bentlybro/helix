@@ -1,0 +1,176 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Debug-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.6.0"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						2
+					]
+				},
+				{
+					"build" : "whisper_cpp_build",
+					"childIndexes" : 
+					[
+						2,
+						4
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-whisper_cpp_build-Debug-81be6cbe3014c4bb77e1.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.5"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 1,
+					"source" : "whisper.cpp"
+				},
+				{
+					"build" : "whisper_cpp_build/ggml",
+					"childIndexes" : 
+					[
+						3
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-whisper_cpp_build.ggml-Debug-8f15e71fcfa8f1f5ebb2.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.14"
+					},
+					"parentIndex" : 1,
+					"projectIndex" : 2,
+					"source" : "whisper.cpp/ggml"
+				},
+				{
+					"build" : "whisper_cpp_build/ggml/src",
+					"jsonFile" : "directory-whisper_cpp_build.ggml.src-Debug-f534cb774bba406c0d1d.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.14"
+					},
+					"parentIndex" : 2,
+					"projectIndex" : 2,
+					"source" : "whisper.cpp/ggml/src",
+					"targetIndexes" : 
+					[
+						0
+					]
+				},
+				{
+					"build" : "whisper_cpp_build/src",
+					"jsonFile" : "directory-whisper_cpp_build.src-Debug-80fed260b4c315792284.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.5"
+					},
+					"parentIndex" : 1,
+					"projectIndex" : 1,
+					"source" : "whisper.cpp/src",
+					"targetIndexes" : 
+					[
+						1
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"childIndexes" : 
+					[
+						1
+					],
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "whisper_jni",
+					"targetIndexes" : 
+					[
+						2
+					]
+				},
+				{
+					"childIndexes" : 
+					[
+						2
+					],
+					"directoryIndexes" : 
+					[
+						1,
+						4
+					],
+					"name" : "whisper.cpp",
+					"parentIndex" : 0,
+					"targetIndexes" : 
+					[
+						1
+					]
+				},
+				{
+					"directoryIndexes" : 
+					[
+						2,
+						3
+					],
+					"name" : "ggml",
+					"parentIndex" : 1,
+					"targetIndexes" : 
+					[
+						0
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 3,
+					"id" : "ggml::@4ae1f489fe438569ad2e",
+					"jsonFile" : "target-ggml-Debug-773135bdd42fd0307c53.json",
+					"name" : "ggml",
+					"projectIndex" : 2
+				},
+				{
+					"directoryIndex" : 4,
+					"id" : "whisper::@21d7d5c7c4e0e1ef8c5e",
+					"jsonFile" : "target-whisper-Debug-70264d74a80941c0707a.json",
+					"name" : "whisper",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "whisper_jni::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-whisper_jni-Debug-fdfad5af9ec4e4dae9dc.json",
+					"name" : "whisper_jni",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "D:/Desktop/desktop misc/python coding/headtracker/apps/helix-mic-android/app/.cxx/Debug/366w316q/arm64-v8a",
+		"source" : "D:/Desktop/desktop misc/python coding/headtracker/apps/helix-mic-android/app/src/main/cpp"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 3
+	}
+}

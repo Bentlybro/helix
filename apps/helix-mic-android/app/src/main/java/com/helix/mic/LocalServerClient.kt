@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit
  * Client for the Helix STT local server.
  * Connects via WebSocket, sends raw PCM bytes, receives JSON transcription events.
  */
-class LocalServerClient(private val serverUrl: String) {
+class LocalServerClient(private val serverUrl: String) : TranscriptionBackend {
 
     companion object {
         private const val TAG = "LocalServerClient"
@@ -20,16 +20,16 @@ class LocalServerClient(private val serverUrl: String) {
     }
 
     private val _segments = MutableStateFlow<List<TranscriptSegment>>(emptyList())
-    val segments: StateFlow<List<TranscriptSegment>> = _segments.asStateFlow()
+    override val segments: StateFlow<List<TranscriptSegment>> = _segments.asStateFlow()
 
     private val _partialText = MutableStateFlow("")
-    val partialText: StateFlow<String> = _partialText.asStateFlow()
+    override val partialText: StateFlow<String> = _partialText.asStateFlow()
 
     private val _isConnected = MutableStateFlow(false)
-    val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+    override val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
+    override val error: StateFlow<String?> = _error.asStateFlow()
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocket: WebSocket? = null
@@ -43,7 +43,7 @@ class LocalServerClient(private val serverUrl: String) {
         .pingInterval(30, TimeUnit.SECONDS)
         .build()
 
-    fun start() {
+    override fun start() {
         active = true
         reconnectAttempts = 0
         _segments.value = emptyList()
@@ -53,7 +53,7 @@ class LocalServerClient(private val serverUrl: String) {
         Log.d(TAG, "LocalServerClient started, connecting to $serverUrl")
     }
 
-    fun stop() {
+    override fun stop() {
         active = false
         webSocket?.close(1000, "Recording stopped")
         webSocket = null
@@ -61,7 +61,7 @@ class LocalServerClient(private val serverUrl: String) {
         Log.d(TAG, "LocalServerClient stopped")
     }
 
-    fun clear() {
+    override fun clear() {
         _segments.value = emptyList()
         _partialText.value = ""
         _error.value = null
@@ -71,7 +71,7 @@ class LocalServerClient(private val serverUrl: String) {
      * Send raw PCM audio directly — no encoding, no resampling.
      * Server expects 16kHz 16-bit mono little-endian PCM.
      */
-    fun feedAudio(pcmData: ByteArray) {
+    override fun feedAudio(pcmData: ByteArray) {
         if (!active || !_isConnected.value) return
         try {
             webSocket?.send(okio.ByteString.of(*pcmData))
@@ -183,11 +183,11 @@ class LocalServerClient(private val serverUrl: String) {
         }
     }
 
-    fun getFullTranscriptText(): String {
+    override fun getFullTranscriptText(): String {
         return _segments.value.joinToString(" ") { it.text }
     }
 
-    fun destroy() {
+    override fun destroy() {
         active = false
         webSocket?.close(1000, "Destroyed")
         webSocket = null

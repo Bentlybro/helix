@@ -1,5 +1,6 @@
 package com.helix.mic
 
+import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import org.json.JSONArray
@@ -12,7 +13,8 @@ data class Session(
     val endTime: Long,
     val transcript: List<TranscriptSegment>,
     val summary: String?,
-    val title: String? = null
+    val title: String? = null,
+    val hasAudio: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -20,6 +22,7 @@ data class Session(
         put("endTime", endTime)
         put("summary", summary ?: JSONObject.NULL)
         put("title", title ?: JSONObject.NULL)
+        put("hasAudio", hasAudio)
         put("transcript", JSONArray().apply {
             transcript.forEach { seg ->
                 put(JSONObject().apply {
@@ -50,13 +53,17 @@ data class Session(
                 endTime = json.getLong("endTime"),
                 transcript = segments,
                 summary = if (json.isNull("summary")) null else json.getString("summary"),
-                title = if (json.has("title") && !json.isNull("title")) json.getString("title") else null
+                title = if (json.has("title") && !json.isNull("title")) json.getString("title") else null,
+                hasAudio = json.optBoolean("hasAudio", false)
             )
         }
     }
 }
 
-class SessionManager(private val prefs: SharedPreferences) {
+class SessionManager(
+    private val prefs: SharedPreferences,
+    private val appContext: Context? = null
+) {
 
     companion object {
         private const val TAG = "SessionManager"
@@ -75,17 +82,19 @@ class SessionManager(private val prefs: SharedPreferences) {
     fun stopSession(
         sessionId: String,
         transcript: List<TranscriptSegment>,
-        summary: String? = null
+        summary: String? = null,
+        hasAudio: Boolean = false
     ): Session {
         val session = Session(
             id = sessionId,
             startTime = currentSessionStart,
             endTime = System.currentTimeMillis(),
             transcript = transcript,
-            summary = summary
+            summary = summary,
+            hasAudio = hasAudio
         )
         saveSession(session)
-        Log.d(TAG, "Session $sessionId saved (${transcript.size} segments)")
+        Log.d(TAG, "Session $sessionId saved (${transcript.size} segments, audio=$hasAudio)")
         return session
     }
 
@@ -114,6 +123,7 @@ class SessionManager(private val prefs: SharedPreferences) {
         val sessions = loadSessions().toMutableList()
         sessions.removeAll { it.id == sessionId }
         saveSessions(sessions)
+        appContext?.let { SessionAudioRecorder.delete(it, sessionId) }
         Log.d(TAG, "Session $sessionId deleted")
     }
 

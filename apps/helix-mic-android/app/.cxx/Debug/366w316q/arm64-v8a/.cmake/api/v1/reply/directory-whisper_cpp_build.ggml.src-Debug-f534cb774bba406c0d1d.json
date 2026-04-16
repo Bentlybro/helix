@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "whisper_cpp_build/ggml/src",
+		"source" : "whisper.cpp/ggml/src"
+	}
+}

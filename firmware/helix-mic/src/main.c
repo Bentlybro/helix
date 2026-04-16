@@ -67,7 +67,9 @@ static void audio_frame_handler(int16_t *buf, size_t num_samples);
 static void connection_changed(bool connected);
 static void on_connect_start_mic(void);
 static int init_battery_adc(void);
-static uint8_t read_battery_level(void);
+/* Reads the battery: returns percent (0-100) or 0xFF on failure.
+ * Writes the measured millivolts into *out_mv on success (0 on failure). */
+static uint8_t read_battery_level(uint16_t *out_mv);
 
 /* Track mic state for fallback start */
 static volatile bool mic_running = false;
@@ -199,9 +201,14 @@ int main(void)
 
         if (now_connected) {
             /* Update battery level periodically */
-            uint8_t level = read_battery_level();
-            transport_update_battery(level);
-            LOG_DBG("Battery: %u%%", level);
+            uint16_t mv = 0;
+            uint8_t level = read_battery_level(&mv);
+            transport_update_battery(level, mv);
+            if (level == 0xFF) {
+                LOG_WRN("Battery read failed");
+            } else {
+                LOG_INF("Battery: %u%% (%u mV)", level, mv);
+            }
         } else if (was_connected) {
             /* Just disconnected — give red flash time, then advertising LED */
             k_sleep(K_MSEC(300));
@@ -329,28 +336,34 @@ static int init_battery_adc(void)
     return 0;
 }
 
-static uint8_t read_battery_level(void)
+static uint8_t read_battery_level(uint16_t *out_mv)
 {
     int ret;
+    if (out_mv) *out_mv = 0;
     int32_t mv;
     uint8_t percent;
     
     if (!device_is_ready(adc_dev)) {
-        return 100;  /* Default if ADC not available */
+        LOG_WRN("Battery ADC device not ready");
+        return 0xFF;  /* Sentinel: unknown */
     }
-    
+
     ret = adc_read(adc_dev, &adc_seq);
     if (ret < 0) {
-        return 100;
+        LOG_WRN("Battery adc_read failed: %d", ret);
+        return 0xFF;
     }
     
     /* Convert ADC value to millivolts */
     mv = adc_buffer;
     /* ADC reading → pin voltage → battery voltage */
     mv = (mv * BATTERY_ADC_RANGE_MV) / BATTERY_ADC_MAX;  /* Pin voltage in mV */
+    const int pin_mv = mv;
     mv = mv * BATTERY_DIVIDER;  /* Actual battery voltage (divider is 1/2) */
-    LOG_DBG("Battery ADC: raw=%d, pin_mv=%d, bat_mv=%d", adc_buffer, mv/2, mv);
-    
+    LOG_INF("Battery ADC: raw=%d, pin_mv=%d, bat_mv=%d", adc_buffer, pin_mv, mv);
+
+    if (out_mv) *out_mv = (uint16_t)mv;
+
     /* Convert to percentage */
     if (mv <= BATTERY_MIN_MV) {
         percent = 0;
@@ -359,6 +372,6 @@ static uint8_t read_battery_level(void)
     } else {
         percent = ((mv - BATTERY_MIN_MV) * 100) / (BATTERY_MAX_MV - BATTERY_MIN_MV);
     }
-    
+
     return percent;
 }

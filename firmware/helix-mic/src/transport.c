@@ -20,6 +20,15 @@ LOG_MODULE_REGISTER(transport, CONFIG_LOG_DEFAULT_LEVEL);
 #include <zephyr/bluetooth/gatt.h>
 #include <string.h>
 
+/* Zephyr 4.x renamed BT_LE_ADV_OPT_CONNECTABLE → BT_LE_ADV_OPT_CONN
+ * and removed the BT_LE_ADV_CONN convenience macro. */
+#ifndef BT_LE_ADV_CONN
+#define BT_LE_ADV_CONN BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONN, \
+                                        BT_GAP_ADV_FAST_INT_MIN_2, \
+                                        BT_GAP_ADV_FAST_INT_MAX_2, \
+                                        NULL)
+#endif
+
 /* ─── UUIDs ─────────────────────────────────────────────────────────── */
 
 #define HELIX_SVC_UUID_VAL \
@@ -68,7 +77,8 @@ static void mic_stop_handler(struct k_work *work)
 
 /* Audio packet buffer: 3-byte header + up to 700 bytes payload */
 static uint8_t audio_pkt[703];
-static uint8_t battery_level = 100;
+/* [0] percent (0-100 or 0xFF = unknown), [1..2] millivolts LE */
+static uint8_t battery_packet[3] = { 0xFF, 0, 0 };
 
 /* Negotiated MTU (default minimum, updated after exchange) */
 static uint16_t current_mtu = 23;
@@ -102,7 +112,7 @@ static ssize_t read_battery(struct bt_conn *conn,
                             void *buf, uint16_t len, uint16_t offset)
 {
     return bt_gatt_attr_read(conn, attr, buf, len, offset,
-                             &battery_level, sizeof(battery_level));
+                             battery_packet, sizeof(battery_packet));
 }
 
 /* ─── Dynamic GATT service ──────────────────────────────────────────── */
@@ -219,10 +229,10 @@ static void connected(struct bt_conn *conn, uint8_t err)
     current_conn = bt_conn_ref(conn);
     is_connected = true;
 
-    /* Negotiate optimal link parameters immediately */
-    update_phy(conn);
-    update_data_length(conn);
-    update_mtu(conn);
+    /* Let the Android client drive ALL link negotiation (MTU, PHY, DLE).
+     * Initiating PHY/DLE from firmware while the client sends an MTU
+     * request races on NCS v3.2.4 and deadlocks the ATT layer, preventing
+     * service discovery (status=22 timeout after ~30s). */
 
     LOG_INF("Waiting for client to subscribe before streaming");
 }
@@ -328,6 +338,15 @@ int transport_send_audio(const uint8_t *data, size_t len,
         return -EAGAIN;
     }
 
+    /* Refresh MTU — the client drives the exchange, so current_mtu
+     * may still be the default 23 from init.  bt_gatt_get_mtu() is
+     * cheap (just reads the conn struct). */
+    uint16_t live_mtu = bt_gatt_get_mtu(current_conn);
+    if (live_mtu != current_mtu) {
+        LOG_INF("MTU updated: %u → %u", current_mtu, live_mtu);
+        current_mtu = live_mtu;
+    }
+
     /* Build packet: [seq_num:2][flags:1][payload] */
     size_t total = 3 + len;
     if (total > sizeof(audio_pkt)) {
@@ -356,9 +375,11 @@ int transport_send_audio(const uint8_t *data, size_t len,
     return bt_gatt_notify_cb(current_conn, &params);
 }
 
-int transport_update_battery(uint8_t level)
+int transport_update_battery(uint8_t level, uint16_t millivolts)
 {
-    battery_level = level;
+    battery_packet[0] = level;
+    battery_packet[1] = (uint8_t)(millivolts & 0xFF);
+    battery_packet[2] = (uint8_t)((millivolts >> 8) & 0xFF);
 
     if (!is_connected || !current_conn) {
         return 0;
@@ -366,8 +387,8 @@ int transport_update_battery(uint8_t level)
 
     struct bt_gatt_notify_params params = {
         .attr = &helix_attrs[BATTERY_ATTR_IDX],
-        .data = &battery_level,
-        .len  = sizeof(battery_level),
+        .data = battery_packet,
+        .len  = sizeof(battery_packet),
     };
 
     return bt_gatt_notify_cb(current_conn, &params);

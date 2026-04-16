@@ -1,0 +1,3 @@
+[submodule "apps/helix-mic-android/app/src/main/cpp/whisper.cpp"]
+	path = apps/helix-mic-android/app/src/main/cpp/whisper.cpp
+	url = https://github.com/ggerganov/whisper.cpp

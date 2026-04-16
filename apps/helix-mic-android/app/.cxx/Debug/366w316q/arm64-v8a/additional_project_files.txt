@@ -1,0 +1,8 @@
+D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\include\ggml.h
+D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\include\ggml-cpu.h
+D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\include\ggml-alloc.h
+D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\include\ggml-backend.h
+D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\include\ggml-cpp.h
+D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\src\ggml-quants.h
+D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\ggml\src\ggml-aarch64.h
+D:\Desktop\desktop misc\python coding\headtracker\apps\helix-mic-android\app\src\main\cpp\whisper.cpp\include\whisper.h

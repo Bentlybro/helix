@@ -100,13 +100,7 @@ class HelixForegroundService : Service() {
         val notification = buildNotification("Connected - Idle")
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                )
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
                     NOTIFICATION_ID, notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
