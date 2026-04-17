@@ -168,7 +168,7 @@ class HelixForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_helix_notification)
             .setContentTitle("Helix Mic")
             .setContentText(contentText)
             .setContentIntent(openIntent)

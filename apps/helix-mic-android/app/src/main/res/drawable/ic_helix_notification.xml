@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+
+    <!-- Microphone body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,2C10.34,2 9,3.34 9,5V11C9,12.66 10.34,14 12,14C13.66,14 15,12.66 15,11V5C15,3.34 13.66,2 12,2Z" />
+
+    <!-- Stand -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M17,11H19C19,15.08 15.72,18.45 11.5,18.93V22H12.5V18.93C16.72,18.45 20,15.08 20,11H17M11.5,22V18.93C7.28,18.45 4,15.08 4,11H5C5,15.08 8.28,18.45 12.5,18.93L11.5,22Z" />
+
+    <!-- Small helix dot accent -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.6"
+        android:pathData="M12,6.5C12.55,6.5 13,6.95 13,7.5C13,8.05 12.55,8.5 12,8.5C11.45,8.5 11,8.05 11,7.5C11,6.95 11.45,6.5 12,6.5Z" />
+</vector>

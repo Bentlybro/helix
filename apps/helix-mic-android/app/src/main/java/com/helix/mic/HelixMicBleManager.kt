@@ -94,6 +94,10 @@ class HelixMicBleManager(private val context: Context) {
     private val _batteryMillivolts = MutableStateFlow<Int?>(null)
     val batteryMillivolts: StateFlow<Int?> = _batteryMillivolts
 
+    // Last disconnect reason — human-readable for UI display
+    private val _lastDisconnectReason = MutableStateFlow<String?>(null)
+    val lastDisconnectReason: StateFlow<String?> = _lastDisconnectReason
+
     private val _isReceivingAudio = MutableStateFlow(false)
     val isReceivingAudio: StateFlow<Boolean> = _isReceivingAudio
 
@@ -141,6 +145,7 @@ class HelixMicBleManager(private val context: Context) {
                 this@HelixMicBleManager.gatt = gatt
                 gatt.requestMtu(247)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                _lastDisconnectReason.value = gattDisconnectReason(status)
                 gatt?.close()
                 this@HelixMicBleManager.gatt = null
                 gattQueue.clear()
@@ -151,7 +156,7 @@ class HelixMicBleManager(private val context: Context) {
                 if (autoReconnect) {
                     val delayMs = minOf(1000L * (1 shl minOf(reconnectAttempt, 5)), 30_000L)
                     reconnectAttempt++
-                    Log.d("HelixMic", "Auto-reconnect attempt $reconnectAttempt in ${delayMs}ms")
+                    Log.d("HelixMic", "Auto-reconnect attempt $reconnectAttempt in ${delayMs}ms (reason: ${_lastDisconnectReason.value})")
                     _connectionState.value = ConnectionState.SCANNING
                     reconnectHandler.postDelayed({ startScan() }, delayMs)
                 } else {
@@ -275,8 +280,23 @@ class HelixMicBleManager(private val context: Context) {
     fun startScan() {
         autoReconnect = true
         reconnectAttempt = 0
+
+        // Fast path: if the device is already bonded (paired in system settings),
+        // connect directly instead of scanning. Scans often can't find bonded
+        // devices that are already connected at the OS level.
+        val bonded = bluetoothAdapter?.bondedDevices?.firstOrNull { it.name == DEVICE_NAME }
+        if (bonded != null) {
+            Log.d("HelixMic", "Found bonded device ${bonded.address}, connecting directly")
+            _connectionState.value = ConnectionState.CONNECTING
+            _deviceAddress.value = bonded.address
+            bonded.connectGatt(context, false, gattCallback)
+            return
+        }
+
         _connectionState.value = ConnectionState.SCANNING
+        // Service UUID filter works when the screen is off, unlike name-only filters.
         val filter = ScanFilter.Builder()
+            .setServiceUuid(ParcelUuid(SERVICE_UUID))
             .setDeviceName(DEVICE_NAME)
             .build()
         val settings = ScanSettings.Builder()
@@ -297,6 +317,19 @@ class HelixMicBleManager(private val context: Context) {
         _deviceAddress.value = null
         _batteryPercent.value = null
         _isReceivingAudio.value = false
+    }
+
+    /** Translate Android GATT disconnect status codes into human-readable reasons. */
+    private fun gattDisconnectReason(status: Int): String = when (status) {
+        0 -> "Disconnected cleanly"
+        8 -> "Connection timeout — device out of range?"
+        19 -> "Device disconnected"
+        22 -> "Link supervision timeout"
+        34 -> "Connection rejected"
+        62 -> "Connection failed"
+        133 -> "GATT error — try again"
+        147 -> "Link lost — device out of range?"
+        else -> "Disconnected (status $status)"
     }
 
     fun resetPacketCount() {

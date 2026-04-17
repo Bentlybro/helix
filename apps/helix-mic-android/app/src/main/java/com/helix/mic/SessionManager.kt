@@ -112,6 +112,25 @@ class SessionManager(
         return UUID.randomUUID().toString()
     }
 
+    /** Checkpoint an in-progress session so a crash doesn't lose transcript data. */
+    fun checkpointSession(
+        sessionId: String,
+        transcript: List<TranscriptSegment>,
+        hasAudio: Boolean = false,
+        backendType: String? = null
+    ) {
+        val session = Session(
+            id = sessionId,
+            startTime = currentSessionStart,
+            endTime = System.currentTimeMillis(),
+            transcript = transcript,
+            summary = null,
+            hasAudio = hasAudio,
+            backendType = backendType
+        )
+        dao.insert(SessionEntity.fromSession(session))
+    }
+
     fun stopSession(
         sessionId: String,
         transcript: List<TranscriptSegment>,

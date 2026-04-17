@@ -173,6 +173,20 @@ class WhisperCppClient(
             return
         }
 
+        // Warm up: run a short silent buffer through whisper so the first real
+        // transcription doesn't pay the cold-start cost (mel filters, kv cache).
+        withContext(Dispatchers.IO) {
+            val warmupMs = 1000  // 1 second of silence
+            val warmup = FloatArray(SAMPLE_RATE * warmupMs / 1000) { 0f }
+            val startMs = System.currentTimeMillis()
+            try {
+                WhisperNative.nativeTranscribe(whisperHandle, warmup, language)
+                Log.d(TAG, "Whisper warmup: ${System.currentTimeMillis() - startMs}ms")
+            } catch (t: Throwable) {
+                Log.w(TAG, "Warmup failed (non-fatal)", t)
+            }
+        }
+
         _isConnected.value = true
         startWorker()
     }

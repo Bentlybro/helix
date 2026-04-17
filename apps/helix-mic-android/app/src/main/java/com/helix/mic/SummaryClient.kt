@@ -16,13 +16,14 @@ class SummaryClient(private val apiKey: String) {
     companion object {
         private const val TAG = "SummaryClient"
         private const val API_URL = "https://api.openai.com/v1/chat/completions"
-        private const val SYSTEM_PROMPT = """Analyze this meeting transcript. Provide:
-1) Brief summary (2-3 sentences)
-2) Key decisions made
-3) Action items with owners if mentioned
-4) Any deadlines or dates mentioned
+        private const val SYSTEM_PROMPT = """Analyze this transcript and return structured JSON with these fields:
+- summary: 2-3 sentence plain-English summary
+- decisions: array of strings, key decisions made (empty array if none)
+- action_items: array of objects with "task" (string) and "owner" (string or null) fields
+- deadlines: array of strings describing deadlines/dates mentioned
+- topics: array of 3-5 short topic tags
 
-Format your response with clear headers using markdown bold (**Summary**, **Key Decisions**, **Action Items**, **Deadlines**). If a section has no items, write "None identified." Keep it concise."""
+Return ONLY valid JSON, no markdown fences or commentary."""
     }
 
     private val client = OkHttpClient.Builder()
@@ -31,11 +32,46 @@ Format your response with clear headers using markdown bold (**Summary**, **Key 
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    data class ActionItem(val task: String, val owner: String?)
+
     data class SummaryResult(
         val success: Boolean,
         val summary: String? = null,
+        val decisions: List<String> = emptyList(),
+        val actionItems: List<ActionItem> = emptyList(),
+        val deadlines: List<String> = emptyList(),
+        val topics: List<String> = emptyList(),
         val error: String? = null
-    )
+    ) {
+        /** Render as markdown-like text for storage in Session.summary. */
+        fun toMarkdown(): String {
+            val sb = StringBuilder()
+            if (!summary.isNullOrBlank()) sb.appendLine("**Summary**").appendLine(summary).appendLine()
+            if (decisions.isNotEmpty()) {
+                sb.appendLine("**Key Decisions**")
+                decisions.forEach { sb.appendLine("- $it") }
+                sb.appendLine()
+            }
+            if (actionItems.isNotEmpty()) {
+                sb.appendLine("**Action Items**")
+                actionItems.forEach {
+                    val ownerSuffix = it.owner?.let { o -> " (${o})" } ?: ""
+                    sb.appendLine("- ${it.task}$ownerSuffix")
+                }
+                sb.appendLine()
+            }
+            if (deadlines.isNotEmpty()) {
+                sb.appendLine("**Deadlines**")
+                deadlines.forEach { sb.appendLine("- $it") }
+                sb.appendLine()
+            }
+            if (topics.isNotEmpty()) {
+                sb.appendLine("**Topics**")
+                sb.appendLine(topics.joinToString(" · "))
+            }
+            return sb.toString().trim()
+        }
+    }
 
     suspend fun summarize(transcriptText: String): SummaryResult = withContext(Dispatchers.IO) {
         if (transcriptText.isBlank()) {
@@ -63,6 +99,7 @@ Format your response with clear headers using markdown bold (**Summary**, **Key 
                 put("messages", messages)
                 put("max_tokens", 1024)
                 put("temperature", 0.3)
+                put("response_format", JSONObject().apply { put("type", "json_object") })
             }
 
             val request = Request.Builder()
@@ -91,11 +128,51 @@ Format your response with clear headers using markdown bold (**Summary**, **Key 
                 .getJSONObject("message")
                 .getString("content")
 
-            Log.d(TAG, "Summary generated: ${content.take(100)}...")
-            return@withContext SummaryResult(true, summary = content)
+            Log.d(TAG, "Summary raw: ${content.take(200)}")
+
+            // Parse the structured JSON response
+            val parsed = parseStructured(content)
+            val markdown = parsed.toMarkdown()
+            return@withContext parsed.copy(summary = markdown.ifBlank { parsed.summary })
         } catch (e: Exception) {
             Log.e(TAG, "Summary error", e)
             return@withContext SummaryResult(false, error = e.message ?: "Unknown error")
+        }
+    }
+
+    private fun parseStructured(jsonStr: String): SummaryResult {
+        return try {
+            val obj = JSONObject(jsonStr)
+            val summary = obj.optString("summary", "")
+            val decisions = obj.optJSONArray("decisions")?.let { arr ->
+                (0 until arr.length()).map { arr.getString(it) }
+            } ?: emptyList()
+            val actionItems = obj.optJSONArray("action_items")?.let { arr ->
+                (0 until arr.length()).map { i ->
+                    val o = arr.getJSONObject(i)
+                    ActionItem(
+                        task = o.optString("task", ""),
+                        owner = if (o.has("owner") && !o.isNull("owner")) o.getString("owner") else null
+                    )
+                }.filter { it.task.isNotBlank() }
+            } ?: emptyList()
+            val deadlines = obj.optJSONArray("deadlines")?.let { arr ->
+                (0 until arr.length()).map { arr.getString(it) }
+            } ?: emptyList()
+            val topics = obj.optJSONArray("topics")?.let { arr ->
+                (0 until arr.length()).map { arr.getString(it) }
+            } ?: emptyList()
+            SummaryResult(
+                success = true,
+                summary = summary,
+                decisions = decisions,
+                actionItems = actionItems,
+                deadlines = deadlines,
+                topics = topics
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse structured summary, falling back to raw: ${e.message}")
+            SummaryResult(success = true, summary = jsonStr)
         }
     }
 }

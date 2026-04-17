@@ -185,6 +185,21 @@ static void connected(struct bt_conn *conn, uint8_t err)
     current_conn = bt_conn_ref(conn);
     is_connected = true;
 
+    /* Request a longer supervision timeout so the link survives idle periods
+     * (screen off, app backgrounded). Without this the Android side often
+     * disconnects with GATT_CONN_TIMEOUT when no data is flowing.
+     * interval 7.5-40ms, latency 0 (no slave latency), timeout 6 seconds. */
+    struct bt_le_conn_param param = {
+        .interval_min = 6,     /* 7.5ms */
+        .interval_max = 32,    /* 40ms */
+        .latency      = 0,
+        .timeout      = 600,   /* 6000ms (6s) */
+    };
+    int up_err = bt_conn_le_param_update(conn, &param);
+    if (up_err) {
+        LOG_WRN("Connection param update failed: %d", up_err);
+    }
+
     LOG_INF("Waiting for client to subscribe before streaming");
 }
 

@@ -83,6 +83,7 @@ fun HelixMicApp(
     val batteryMillivolts by bleManager.batteryMillivolts.collectAsState()
     val isReceivingAudio by bleManager.isReceivingAudio.collectAsState()
     val packetCount by bleManager.packetCount.collectAsState()
+    val lastDisconnectReason by bleManager.lastDisconnectReason.collectAsState()
 
     var currentScreen by remember { mutableStateOf(Screen.MAIN) }
     var apiKey by remember { mutableStateOf(sharedPrefs.getString("openai_api_key", "") ?: "") }
@@ -167,6 +168,31 @@ fun HelixMicApp(
         }
     }
 
+    // Auto-checkpoint session every 30s during recording so a crash doesn't
+    // lose the transcript. Uses the full session state for resilience.
+    LaunchedEffect(isRecording, currentSessionId) {
+        if (isRecording && currentSessionId != null) {
+            while (isRecording) {
+                kotlinx.coroutines.delay(30_000)
+                val id = currentSessionId ?: break
+                val segs = segments.toList()
+                if (segs.isNotEmpty()) {
+                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        try {
+                            sessionManager.checkpointSession(
+                                id, segs,
+                                hasAudio = audioRecorder != null,
+                                backendType = backendType.toKey()
+                            )
+                        } catch (e: Exception) {
+                            android.util.Log.w("HelixMic", "Checkpoint failed", e)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Listen for STOP broadcast from foreground service notification
     DisposableEffect(Unit) {
         val receiver = object : BroadcastReceiver() {
@@ -242,9 +268,15 @@ fun HelixMicApp(
 
     // Start foreground service on BLE connect, stop on disconnect
     LaunchedEffect(connectionState) {
-        if (connectionState == ConnectionState.CONNECTED) {
+        if (connectionState == ConnectionState.CONNECTED ||
+            connectionState == ConnectionState.SCANNING ||
+            connectionState == ConnectionState.CONNECTING) {
+            // Keep service alive during reconnect attempts so Android doesn't
+            // kill the app when screen is off.
             HelixForegroundService.start(context)
-        } else if (connectionState == ConnectionState.DISCONNECTED) {
+        } else if (connectionState == ConnectionState.DISCONNECTED && !isRecording) {
+            // Only stop the service when fully disconnected AND not recording.
+            // If recording, keep it alive so the session can resume on reconnect.
             HelixForegroundService.stop(context)
         }
     }
@@ -256,11 +288,43 @@ fun HelixMicApp(
         }
     }
 
+    // Low battery warning — toast once when crossing thresholds (30% and 10%)
+    var lastBatteryWarning by remember { mutableStateOf(100) }
+    LaunchedEffect(batteryPercent) {
+        val pct = batteryPercent ?: return@LaunchedEffect
+        if (pct < 10 && lastBatteryWarning >= 10) {
+            Toast.makeText(context, "Helix battery critical: ${pct}%", Toast.LENGTH_LONG).show()
+            lastBatteryWarning = pct
+        } else if (pct < 30 && lastBatteryWarning >= 30) {
+            Toast.makeText(context, "Helix battery low: ${pct}%", Toast.LENGTH_SHORT).show()
+            lastBatteryWarning = pct
+        } else if (pct >= 30) {
+            lastBatteryWarning = 100 // Reset when charged back up
+        }
+    }
+
+    // Track paused time so the timer shows actual recording duration,
+    // not wall-clock time (pauses during disconnect).
+    var pausedMs by remember { mutableStateOf(0L) }
+    var pauseStartMs by remember { mutableStateOf(0L) }
+    val isPaused = isRecording && connectionState != ConnectionState.CONNECTED
+
+    LaunchedEffect(isPaused) {
+        if (isPaused) {
+            pauseStartMs = System.currentTimeMillis()
+        } else if (pauseStartMs > 0) {
+            pausedMs += System.currentTimeMillis() - pauseStartMs
+            pauseStartMs = 0
+        }
+    }
+
     var elapsedSeconds by remember { mutableStateOf(0L) }
     LaunchedEffect(isRecording, sessionStartTime) {
         if (isRecording && sessionStartTime > 0) {
             while (true) {
-                elapsedSeconds = (System.currentTimeMillis() - sessionStartTime) / 1000
+                if (!isPaused) {
+                    elapsedSeconds = (System.currentTimeMillis() - sessionStartTime - pausedMs) / 1000
+                }
                 kotlinx.coroutines.delay(1000)
             }
         }
@@ -386,6 +450,20 @@ fun HelixMicApp(
                                     )
                                 }
 
+                                // Show last disconnect reason if available
+                                if (lastDisconnectReason != null && connectionState != ConnectionState.CONNECTED) {
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        lastDisconnectReason ?: "",
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = HelixTheme.TextMuted,
+                                        letterSpacing = 1.sp,
+                                        modifier = Modifier.padding(horizontal = 32.dp),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+
                                 Spacer(modifier = Modifier.height(40.dp))
 
                                 if (!blePermissions.allPermissionsGranted) {
@@ -456,6 +534,7 @@ fun HelixMicApp(
                                 error = transcriptionError,
                                 isRecording = isRecording,
                                 isConnected = isConnected,
+                                sessionStartMs = sessionStartTime,
                                 modifier = Modifier.weight(1f).padding(horizontal = 20.dp, vertical = 16.dp)
                             )
 

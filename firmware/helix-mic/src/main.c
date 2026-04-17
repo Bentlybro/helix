@@ -187,13 +187,12 @@ int main(void)
     
     LOG_INF("Helix-Mic ready - waiting for connection");
     
-    /* Main loop - monitor battery and handle state */
-    bool was_connected = false;
+    /* Main loop: poll battery every 5s while connected. LED state transitions
+     * are handled directly by connection_changed() callbacks. The regular
+     * battery notification also serves as a BLE link keepalive when no
+     * audio is streaming. */
     while (1) {
-        bool now_connected = transport_is_connected();
-
-        if (now_connected) {
-            /* Update battery level periodically */
+        if (transport_is_connected()) {
             uint16_t mv = 0;
             uint8_t level = read_battery_level(&mv);
             transport_update_battery(level, mv);
@@ -202,14 +201,8 @@ int main(void)
             } else {
                 LOG_INF("Battery: %u%% (%u mV)", level, mv);
             }
-        } else if (was_connected) {
-            /* Just disconnected — give red flash time, then advertising LED */
-            k_sleep(K_MSEC(300));
-            led_set_state(LED_STATE_ADVERTISING);
         }
-
-        was_connected = now_connected;
-        k_sleep(K_SECONDS(10));
+        k_sleep(K_SECONDS(5));
     }
     
     return 0;
@@ -266,13 +259,31 @@ static void on_connect_start_mic(void)
     }
 }
 
+/* Delayed work to set LED to ADVERTISING after the red disconnect flash. */
+static void led_advertising_work_handler(struct k_work *work)
+{
+    led_set_state(LED_STATE_ADVERTISING);
+}
+static K_WORK_DELAYABLE_DEFINE(led_advertising_work, led_advertising_work_handler);
+
 static void connection_changed(bool connected)
 {
     if (connected) {
         LOG_INF("=== CONNECTION ESTABLISHED ===");
+        /* Cancel any pending advertising-LED transition from a previous disconnect */
+        k_work_cancel_delayable(&led_advertising_work);
         led_set_state(LED_STATE_CONNECTED_IDLE);
     } else {
         LOG_INF("=== CLIENT DISCONNECTED === stopping audio stream");
+        /* Only run the full teardown once — this callback can fire twice
+         * (once from audio_ccc_changed on unsubscribe, once from the BT
+         * disconnected() callback). */
+        if (!mic_running) {
+            LOG_INF("connection_changed(false) — already torn down, skipping");
+            /* Still ensure LED is advertising even if we skip teardown */
+            k_work_reschedule(&led_advertising_work, K_MSEC(250));
+            return;
+        }
         int ret = mic_stop();
         if (ret < 0) {
             LOG_ERR("Mic stop failed: %d", ret);
@@ -286,8 +297,11 @@ static void connection_changed(bool connected)
         ring_buf_reset(&audio_ring_buf);
         pusher_seq = 0;
 
+        /* Brief red flash, then schedule advertising LED at 250ms via
+         * delayable work (don't block the system workqueue with k_sleep). */
         led_set_state(LED_STATE_DISCONNECTED);
-        LOG_INF("State reset, ready for reconnection");
+        k_work_reschedule(&led_advertising_work, K_MSEC(250));
+        LOG_INF("State reset, advertising again");
     }
 }
 

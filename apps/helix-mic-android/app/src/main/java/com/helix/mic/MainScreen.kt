@@ -1,6 +1,7 @@
 package com.helix.mic
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,9 +11,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
@@ -112,11 +117,17 @@ fun StatusLine(
             batteryPercent != null -> "BAT ${batteryPercent}%"
             else -> "BAT --"
         }
+        val isLowBattery = batteryPercent != null && batteryPercent < 20
+        val isCriticalBattery = batteryPercent != null && batteryPercent < 10
         Text(
             batLabel,
             fontSize = 10.sp,
             fontFamily = FontFamily.Monospace,
-            color = HelixTheme.TextMuted
+            color = when {
+                isCriticalBattery -> HelixTheme.RecordingRed
+                isLowBattery -> HelixTheme.TextPrimary
+                else -> HelixTheme.TextMuted
+            }
         )
         if (backendLabel != null) {
             Text(
@@ -159,6 +170,7 @@ fun LiveTranscriptView(
     error: String?,
     isRecording: Boolean,
     isConnected: Boolean,
+    sessionStartMs: Long = 0L,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -200,7 +212,7 @@ fun LiveTranscriptView(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(segments) { segment ->
-                    TranscriptLine(segment)
+                    TranscriptLine(segment, sessionStartMs = sessionStartMs)
                 }
 
                 if (partialText.isNotEmpty()) {
@@ -231,12 +243,84 @@ fun LiveTranscriptView(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun TranscriptLine(segment: TranscriptSegment) {
-    val timeStr = remember(segment.timestamp) {
-        SimpleDateFormat("mm:ss", Locale.getDefault()).format(Date(segment.timestamp))
+fun TranscriptLine(segment: TranscriptSegment, sessionStartMs: Long = 0L) {
+    val timeStr = remember(segment.timestamp, sessionStartMs) {
+        if (sessionStartMs > 0) {
+            val elapsed = ((segment.timestamp - sessionStartMs) / 1000).coerceAtLeast(0)
+            val h = elapsed / 3600
+            val m = (elapsed % 3600) / 60
+            val s = elapsed % 60
+            if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+        } else {
+            SimpleDateFormat("mm:ss", Locale.getDefault()).format(Date(segment.timestamp))
+        }
     }
-    Column(modifier = Modifier.fillMaxWidth()) {
+    var showActions by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    if (showActions) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showActions = false },
+            containerColor = HelixTheme.Background,
+            shape = HelixTheme.SharpShape,
+            title = { Text("SEGMENT", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextPrimary, letterSpacing = 2.sp) },
+            text = {
+                Text(
+                    segment.text,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextSecondary,
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            confirmButton = {
+                Row {
+                    Text(
+                        "COPY", fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextPrimary, letterSpacing = 2.sp,
+                        modifier = Modifier.clickable {
+                            clipboard.setText(AnnotatedString(segment.text))
+                            android.widget.Toast.makeText(context, "Copied", android.widget.Toast.LENGTH_SHORT).show()
+                            showActions = false
+                        }.padding(8.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        "SHARE", fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                        color = HelixTheme.TextPrimary, letterSpacing = 2.sp,
+                        modifier = Modifier.clickable {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, segment.text)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "Share segment"))
+                            showActions = false
+                        }.padding(8.dp)
+                    )
+                }
+            },
+            dismissButton = {
+                Text(
+                    "CANCEL", fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextMuted, letterSpacing = 2.sp,
+                    modifier = Modifier.clickable { showActions = false }.padding(8.dp)
+                )
+            }
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = {},
+                onLongClick = { showActions = true }
+            )
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically

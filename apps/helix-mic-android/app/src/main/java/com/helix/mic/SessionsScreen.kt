@@ -38,7 +38,58 @@ fun SessionsListScreen(
     onSessionClick: (Session) -> Unit
 ) {
     var sessions by remember { mutableStateOf(sessionManager.loadSessions()) }
+    var showDeleteAllDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
+
+    if (showDeleteAllDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showDeleteAllDialog = false },
+            containerColor = HelixTheme.Background,
+            shape = HelixTheme.SharpShape,
+            title = {
+                Text(
+                    "DELETE ALL SESSIONS?",
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextPrimary,
+                    letterSpacing = 2.sp
+                )
+            },
+            text = {
+                Text(
+                    "This will permanently delete all ${sessions.size} saved sessions, transcripts, and audio recordings. This cannot be undone.",
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextSecondary
+                )
+            },
+            confirmButton = {
+                Text(
+                    "DELETE ALL",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.RecordingRed,
+                    letterSpacing = 2.sp,
+                    modifier = Modifier.clickable {
+                        sessionManager.deleteAllSessions()
+                        sessions = emptyList()
+                        showDeleteAllDialog = false
+                        Toast.makeText(context, "All sessions deleted", Toast.LENGTH_SHORT).show()
+                    }.padding(8.dp)
+                )
+            },
+            dismissButton = {
+                Text(
+                    "CANCEL",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = HelixTheme.TextMuted,
+                    letterSpacing = 2.sp,
+                    modifier = Modifier.clickable { showDeleteAllDialog = false }.padding(8.dp)
+                )
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -84,9 +135,7 @@ fun SessionsListScreen(
                     color = HelixTheme.RecordingRed,
                     letterSpacing = 2.sp,
                     modifier = Modifier.clickable {
-                        sessionManager.deleteAllSessions()
-                        sessions = emptyList()
-                        Toast.makeText(context, "All sessions deleted", Toast.LENGTH_SHORT).show()
+                        showDeleteAllDialog = true
                     }.padding(4.dp)
                 )
             }
@@ -105,24 +154,68 @@ fun SessionsListScreen(
                 )
             }
         } else {
+            // Group sessions by relative date bucket
+            val grouped = remember(sessions) { groupSessionsByDate(sessions) }
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                items(sessions, key = { it.id }) { session ->
-                    SwipeToDeleteRow(
-                        onDelete = {
-                            sessionManager.deleteSession(session.id)
-                            sessions = sessionManager.loadSessions()
-                            Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
-                        }
-                    ) {
-                        SessionRow(session = session, onClick = { onSessionClick(session) })
+                grouped.forEach { (bucket, sessionsInBucket) ->
+                    item(key = "header-$bucket") {
+                        Text(
+                            bucket,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Light,
+                            color = HelixTheme.TextMuted,
+                            letterSpacing = 3.sp,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
+                        )
+                        HairlineDivider()
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
-                    Spacer(modifier = Modifier.height(1.dp))
-                    HairlineDivider()
-                    Spacer(modifier = Modifier.height(12.dp))
+                    items(sessionsInBucket, key = { it.id }) { session ->
+                        SwipeToDeleteRow(
+                            onDelete = {
+                                sessionManager.deleteSession(session.id)
+                                sessions = sessionManager.loadSessions()
+                                Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            SessionRow(session = session, onClick = { onSessionClick(session) })
+                        }
+                        Spacer(modifier = Modifier.height(1.dp))
+                        HairlineDivider()
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
                 }
             }
+        }
+    }
+}
+
+/** Group sessions into relative date buckets (TODAY / YESTERDAY / specific dates). */
+private fun groupSessionsByDate(sessions: List<Session>): Map<String, List<Session>> {
+    val now = Calendar.getInstance()
+    val today = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val yesterday = today - 24L * 60 * 60 * 1000
+    val thisWeek = today - 7L * 24 * 60 * 60 * 1000
+    val thisYear = Calendar.getInstance().apply { set(Calendar.DAY_OF_YEAR, 1) }.timeInMillis
+
+    val dayFmt = SimpleDateFormat("EEEE", Locale.getDefault())
+    val monthDayFmt = SimpleDateFormat("MMM d", Locale.getDefault())
+    val fullFmt = SimpleDateFormat("MMM d yyyy", Locale.getDefault())
+
+    return sessions.groupBy { session ->
+        val t = session.startTime
+        when {
+            t >= today -> "TODAY"
+            t >= yesterday -> "YESTERDAY"
+            t >= thisWeek -> dayFmt.format(Date(t)).uppercase()
+            t >= thisYear -> monthDayFmt.format(Date(t)).uppercase()
+            else -> fullFmt.format(Date(t)).uppercase()
         }
     }
 }
@@ -219,6 +312,41 @@ fun SessionDetailScreen(
     var editTitle by remember { mutableStateOf(session.title ?: "") }
 
     var activeTab by remember { mutableStateOf(0) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    if (showDeleteDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            containerColor = HelixTheme.Background,
+            shape = HelixTheme.SharpShape,
+            title = {
+                Text("DELETE SESSION?", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextPrimary, letterSpacing = 2.sp)
+            },
+            text = {
+                Text(
+                    "This will delete the transcript${if (session.hasAudio) " and audio recording" else ""}. This cannot be undone.",
+                    fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextSecondary
+                )
+            },
+            confirmButton = {
+                Text(
+                    "DELETE", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.RecordingRed, letterSpacing = 2.sp,
+                    modifier = Modifier.clickable {
+                        sessionManager.deleteSession(session.id)
+                        showDeleteDialog = false
+                        Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
+                        onDeleted()
+                    }.padding(8.dp)
+                )
+            },
+            dismissButton = {
+                Text(
+                    "CANCEL", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = HelixTheme.TextMuted, letterSpacing = 2.sp,
+                    modifier = Modifier.clickable { showDeleteDialog = false }.padding(8.dp)
+                )
+            }
+        )
+    }
     val audioPlayer = remember { SessionAudioPlayer() }
     val isPlaying by audioPlayer.isPlaying.collectAsState()
     val progressMs by audioPlayer.progressMs.collectAsState()
@@ -465,7 +593,11 @@ fun SessionDetailScreen(
                         OutlinedButton(
                             onClick = {
                                 val fullTranscript = session.transcript.joinToString("\n") { seg ->
-                                    val time = SimpleDateFormat("mm:ss", Locale.getDefault()).format(Date(seg.timestamp))
+                                    val elapsed = ((seg.timestamp - session.startTime) / 1000).coerceAtLeast(0)
+                                    val h = elapsed / 3600
+                                    val m = (elapsed % 3600) / 60
+                                    val s = elapsed % 60
+                                    val time = if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
                                     val speaker = if (seg.speaker != null) " [${seg.speaker}]" else ""
                                     "[$time]$speaker ${seg.text}"
                                 }
@@ -486,7 +618,7 @@ fun SessionDetailScreen(
                 }
 
                 items(session.transcript) { segment ->
-                    TranscriptLine(segment)
+                    TranscriptLine(segment, sessionStartMs = session.startTime)
                 }
 
                 if (session.transcript.isEmpty()) {
@@ -525,11 +657,7 @@ fun SessionDetailScreen(
                 Text("EXPORT", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light, letterSpacing = 3.sp)
             }
             OutlinedButton(
-                onClick = {
-                    sessionManager.deleteSession(session.id)
-                    Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
-                    onDeleted()
-                },
+                onClick = { showDeleteDialog = true },
                 modifier = Modifier.weight(1f).height(40.dp),
                 shape = HelixTheme.SharpShape,
                 border = BorderStroke(0.5.dp, HelixTheme.RecordingRed.copy(alpha = 0.5f)),
