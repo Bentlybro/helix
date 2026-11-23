@@ -1,0 +1,20 @@
+Item,Designator,Qty,Manufacturer,Mfg Part #,Description,Package,Type
+1,"C1,C3,C5",3,Murata,GRM155R60J475ME47D,Capacitor 4.7 uF 6.3 V X5R 0402,C_0402_1005Metric,SMD
+2,"C2,C4,C8,C10",4,Murata,GRM155R71C104KA88D,Capacitor 100 nF 16 V X7R 0402,C_0402_1005Metric,SMD
+3,C6,1,Murata,GRM155R61A105KE15D,Capacitor 1 uF 10 V X5R 0402,C_0402_1005Metric,SMD
+4,"D1,D2,D3",3,Texas Instruments,TPD1E05U06DYAR,"TVS diode 5.5 V 0.45 pF, SOD-523",D_SOD-523,SMD
+5,D4,1,any,"white LED, 0402, 5 mA",Status light: PCBWay to propose a stocked part,LED_0402_1005Metric,SMD
+6,D5,1,onsemi,BAT54XV2T1G,"Schottky diode 30 V 200 mA, SOD-523",D_SOD-523,SMD
+7,J1,1,HRO (Korean Hroparts Elec),TYPE-C-31-M-12,"USB Type-C receptacle, 16 pin",USB_C_Receptacle_HRO_TYPE-C-31-M-12,Thru-hole + SMD
+8,MK1,1,Knowles,SPH0641LU4H-1,"PDM MEMS microphone, bottom port",Knowles_LGA-5_3.5x2.65mm,SMD
+9,"R1,R2",2,Yageo,RC0402FR-074K7L,Resistor 4.7 k 1 % 0402,R_0402_1005Metric,SMD
+10,"R11,R12",2,Yageo,RC0402FR-075K1L,Resistor 5.1 k 1 % 0402,R_0402_1005Metric,SMD
+11,R3,1,Yageo,RC0402FR-0720KL,Resistor 20 k 1 % 0402,R_0402_1005Metric,SMD
+12,"R6,R7",2,Yageo,RC0402FR-071ML,Resistor 1 M 1 % 0402,R_0402_1005Metric,SMD
+13,R8,1,Yageo,RC0402FR-071KL,Resistor 1 k 1 % 0402,R_0402_1005Metric,SMD
+14,R9,1,Yageo,RC0402FR-0710KL,Resistor 10 k 1 % 0402,R_0402_1005Metric,SMD
+15,SW1,1,Panasonic,EVQ-PUJ02K,Side-push tactile switch 4.7 x 3.5 x 1.65 mm,Panasonic_EVQPUJ_EVQPUA,SMD
+16,U1,1,Raytac,MDBT50Q-1MV2,"nRF52840 Bluetooth module, chip antenna",Raytac_MDBT50Q,SMD
+17,U2,1,STMicroelectronics,LSM6DS3TR-C,"6-axis IMU, LGA-14",LGA-14_3x2.5mm_P0.5mm_LayoutBorder3x4y,SMD
+18,U3,1,Microchip,MCP73831T-2ACI/OT,"Li-ion charger 4.2 V, SOT-23-5",SOT-23-5,SMD
+19,U4,1,Texas Instruments,TLV75530PDBVR,"Regulator 3.0 V 500 mA, SOT-23-5",SOT-23-5,SMD

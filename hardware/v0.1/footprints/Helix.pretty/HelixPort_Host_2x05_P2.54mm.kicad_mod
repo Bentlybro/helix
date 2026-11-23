@@ -1,0 +1,125 @@
+(footprint "HelixPort_Host_2x05_P2.54mm"
+	(version 20241229)
+	(generator "make_footprints")
+	(layer "F.Cu")
+	(descr "Helix Port, the host side: 10 flat ENIG contact pads a module's spring pins land on, 2 x 5 on a 2.54 mm grid")
+	(tags "helix port pogo magnetic module")
+	(property "Reference" "J**"
+		(at 0 -3.02 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "b992dd2b-09fc-5f31-8848-b7a2f3454933")
+		(effects
+			(font
+				(size 0.6 0.6)
+				(thickness 0.1)
+			)
+		)
+	)
+	(property "Value" "HelixPort_Host_2x05_P2.54mm"
+		(at 0 3.02 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "dc33f2b5-4aaf-5be2-bacd-607452da0b74")
+		(effects
+			(font
+				(size 0.6 0.6)
+				(thickness 0.1)
+			)
+		)
+	)
+	(attr smd exclude_from_pos_files exclude_from_bom)
+	(fp_rect
+		(start -6.03 -2.22)
+		(end 6.03 2.22)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "aa4fcffc-af10-52e3-a023-d3b1566c4163")
+	)
+	(fp_rect
+		(start -5.93 -2.12)
+		(end 5.93 2.12)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "0a0c23ff-2b81-5e43-8be3-7d699f72c2cb")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(uuid "b98932f1-14a0-5920-9d4e-6bd72c81633a")
+		(effects
+			(font
+				(size 0.6 0.6)
+				(thickness 0.1)
+			)
+		)
+	)
+	(pad "1" smd circle
+		(at -5.08 1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "691ad9bb-5bd8-5b3b-9fdf-2f0c204aec03")
+	)
+	(pad "2" smd circle
+		(at -5.08 -1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "d90ba011-29e4-5106-b852-86111c4f27a0")
+	)
+	(pad "3" smd circle
+		(at -2.54 1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "fd021656-686d-5c9b-9a17-7fbfe994b890")
+	)
+	(pad "4" smd circle
+		(at -2.54 -1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "f575064c-469c-50b0-a449-c6a619dec1cf")
+	)
+	(pad "5" smd circle
+		(at 0 1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "c85962e6-8513-5e06-8747-003170c65fd5")
+	)
+	(pad "6" smd circle
+		(at 0 -1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "aec61388-7033-5886-9bdd-5bdd8b29f99a")
+	)
+	(pad "7" smd circle
+		(at 2.54 1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "8fedb8e9-1be0-5a0b-b3a2-ad5796201553")
+	)
+	(pad "8" smd circle
+		(at 2.54 -1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "37c80767-db9a-524e-8a37-1130d8a25a30")
+	)
+	(pad "9" smd circle
+		(at 5.08 1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "983a59fa-c90f-5d1a-b6e3-a9a417d86296")
+	)
+	(pad "10" smd circle
+		(at 5.08 -1.27)
+		(size 1.5 1.5)
+		(layers "F.Cu" "F.Mask")
+		(uuid "535477e3-4eac-5b2f-876b-68b73ff9613c")
+	)
+)

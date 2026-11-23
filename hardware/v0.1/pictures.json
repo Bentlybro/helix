@@ -1,0 +1,61 @@
+{
+  "boards": [
+    {
+      "path": "core",
+      "name": "core",
+      "prefix": "core-",
+      "strict": true,
+      "stills": [
+        "board-3d-top.png",
+        "board-3d-bottom.png",
+        "board-3d-iso.png",
+        "board-top.png",
+        "board-bottom.png",
+        "schematic.png"
+      ],
+      "layers": "layers-core.png",
+      "spins": [
+        {
+          "as": "core-spin.gif",
+          "tilt": -55,
+          "zoom": 0.9
+        }
+      ]
+    },
+    {
+      "path": "health",
+      "name": "health",
+      "prefix": "health-",
+      "strict": true,
+      "stills": [
+        "board-3d-top.png",
+        "board-3d-bottom.png",
+        "board-3d-iso.png",
+        "board-top.png",
+        "board-bottom.png",
+        "schematic.png"
+      ],
+      "layers": "layers-health.png",
+      "spins": [
+        {
+          "as": "health-spin.gif",
+          "tilt": -55,
+          "zoom": 0.9
+        }
+      ]
+    }
+  ],
+  "scenes": [
+    {
+      "script": "assembly.py",
+      "what": "the Core in its pod, with its cell, on the ear hook",
+      "copy": {
+        "build/assembly/assembly-iso.png": "assembly-iso.png",
+        "build/assembly/assembly-back.png": "assembly-back.png",
+        "build/assembly/assembly-side.png": "assembly-side.png",
+        "build/assembly/assembly-edge.png": "assembly-edge.png",
+        "build/assembly/assembly-spin.gif": "assembly-spin.gif"
+      }
+    }
+  ]
+}

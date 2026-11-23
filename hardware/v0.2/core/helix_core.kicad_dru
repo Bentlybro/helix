@@ -1,0 +1,30 @@
+(version 1)
+# PCBWay, a standard rigid board. Limits from "PCB Capabilities" (the page's title),
+# https://www.pcbway.com/capabilities.html, read 2026-11-17 (the page as fetched had SHA256
+# d6623fcf6223e137831cd6b9855d16d7e1e18faa6c9d8fb44fe77ffafe6b6a88). When a design file sets
+# `fab = "pcbway-standard"`, or for one run with `workcenter drc --fab pcbway-standard`, the rules with no
+# layer and no condition raise the board's own minimums, and only the others are copied into the
+# project (rules/README.md, M62). rules/README.md lists what PCBWay publishes that this file leaves out.
+# second_reader: 2026-11-17, every number compared; the page fetched again had SHA256 d6623fcf6223e137831cd6b9855d16d7e1e18faa6c9d8fb44fe77ffafe6b6a88
+
+# "Min Trace 0.1mm/4mil"
+# "pcbway-standard: trace 0.1 mm" is board-wide: carried as the board's own minimum (min_track_width 0.1 mm), where it cannot override a net class.
+
+# "Min manufacturable spacing is 4mil(0.1mm)"
+# "pcbway-standard: spacing 0.1 mm" is board-wide: carried as the board's own minimum (min_clearance 0.1 mm), where it cannot override a net class.
+
+# "Drill Sizes (CNC) 0.15-6.0mm Min drill size is 0.15mm"
+# "pcbway-standard: drill 0.15 mm" is board-wide: carried as the board's own minimum (min_through_hole_diameter 0.15 mm), where it cannot override a net class.
+
+# "Min Width of Annular Ring 0.15mm(6mil). For pads with vias in the middle, Min width for Annular Ring
+# is 0.15mm(6mil)."
+# "pcbway-standard: annular ring 0.15 mm" is board-wide: carried as the board's own minimum (min_via_annular_width 0.15 mm), where it cannot override a net class.
+
+# "Minimum Character Width(Legend) 0.15mm" and "Minimum Character Height (Legend) - 0.8mm"
+(rule "pcbway-standard: legend 0.15 mm stroke, 0.8 mm high"
+	(condition "A.Layer == 'F.Silkscreen' || A.Layer == 'B.Silkscreen'")
+	(constraint text_thickness (min 0.15mm))
+	(constraint text_height (min 0.8mm))
+	(severity error))
+
+# Copied by Via from pcbway-standard.kicad_dru (Design.fab); edit the source, not this file.

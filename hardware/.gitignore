@@ -1,0 +1,4 @@
+build/
+*.kicad_prl
+__pycache__/
+.3dmodels/
